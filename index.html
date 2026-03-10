@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nostr Site Template</title>
+  <meta name="description" content="A static-first Nostr-backed site template for archives, guides, submissions, maps, and lightweight moderation.">
+  <meta name="theme-color" content="#121212">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body data-page="home">
+  <header class="site-header">
+    <div class="wrap site-header__inner">
+      <a class="brand" href="./index.html">
+        <span class="brand__mark">NS</span>
+        <span class="brand__text">
+          <strong>Nostr Site</strong>
+          <span>Static-first publishing with relay-backed collaboration.</span>
+        </span>
+      </a>
+      <button class="nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="siteNav"></button>
+      <nav id="siteNav" class="site-nav" data-site-nav></nav>
+    </div>
+  </header>
+
+  <div class="page-shell">
+    <main>
+      <section class="hero hero--home">
+        <div class="wrap hero__grid">
+          <div class="hero__copy">
+            <div class="eyebrow">Template starter</div>
+            <h1>Launch a lightweight archive without a heavy CMS.</h1>
+            <p class="hero__lede">This starter combines markdown-backed public pages, relay-backed collaboration, a role-aware workspace, and a map/index layer that can grow with a campaign, research archive, or community publication.</p>
+            <div class="hero__actions">
+              <a class="button" href="./blog.html">Browse sample posts</a>
+              <a class="button-ghost" href="./guide.html">Open the guide</a>
+              <a class="button-dark" href="./submit.html">Try submissions</a>
+            </div>
+          </div>
+
+          <aside class="hero__panel">
+            <div class="hero__panel-top">
+              <div>
+                <div class="eyebrow">What ships in the box</div>
+                <h3>Public pages, collaboration, and a clear update path</h3>
+              </div>
+              <small class="muted">Template preview</small>
+            </div>
+            <div class="hero__panel-body">
+              <p>The sample shell shows how a small site can publish posts cleanly, collect private submissions, moderate relay-backed content, and later snapshot approved cleartext content back into Git.</p>
+              <ul class="hero__evidence">
+                <li>
+                  <strong>Archive posts</strong>
+                  <small>Markdown entries with tags, notes, and structured metadata.</small>
+                </li>
+                <li>
+                  <strong>Guides</strong>
+                  <small>Replace the sample tutorial with your own playbook, process, or onboarding notes.</small>
+                </li>
+                <li>
+                  <strong>Participation flows</strong>
+                  <small>Logins, submissions, comments, moderation, entities, and map indexing.</small>
+                </li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap metric-grid">
+          <article class="metric-card">
+            <strong>3</strong>
+            <p>Sample posts showing the archive layout, tags, and supporting-note structure.</p>
+          </article>
+          <article class="metric-card">
+            <strong>1</strong>
+            <p>Markdown guide page ready to be replaced with your own instructions.</p>
+          </article>
+          <article class="metric-card">
+            <strong>Map-ready</strong>
+            <p>Entity entries can connect posts to a geographic index without turning the site into a heavy CMS.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap section__head">
+          <div>
+            <div class="eyebrow">Archive</div>
+            <h2>Featured sample posts</h2>
+          </div>
+          <p>The sample archive below is filler, but it shows the intended rhythm: clear headlines, tags, a small note stack, and enough structure for regular publishing.</p>
+        </div>
+        <div class="wrap card-grid" data-home-investigations data-count="2"></div>
+      </section>
+
+      <section class="section">
+        <div class="wrap section__head">
+          <div>
+            <div class="eyebrow">Workflow</div>
+            <h2>How content moves through the system</h2>
+          </div>
+          <p>Live relay state handles collaboration. Approved cleartext content can then be snapped back into committed markdown and seed files.</p>
+        </div>
+        <div class="wrap card-grid">
+          <article class="info-card">
+            <div class="eyebrow">1. Publish</div>
+            <h3>Keep the public layer simple</h3>
+            <p>Posts, guides, and evergreen pages stay readable because the public site is still mostly static files.</p>
+          </article>
+          <article class="info-card">
+            <div class="eyebrow">2. Collaborate</div>
+            <h3>Use relay state for live review</h3>
+            <p>Accounts, submissions, comments, drafts, and entities can stay dynamic without standing up a traditional backend.</p>
+          </article>
+          <article class="info-card">
+            <div class="eyebrow">3. Snapshot</div>
+            <h3>Commit approved content back to Git</h3>
+            <p>The intended operating model is live relay state first, then reviewed snapshots into seed files and markdown for durable publishing.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap page-layout">
+          <div class="surface-panel">
+            <div class="eyebrow">Customize</div>
+            <h2>Swap this copy for your mission fast.</h2>
+            <p>Use this section for a direct participation ask, a volunteer funnel, a campaign summary, or a simple start-here route for new visitors.</p>
+            <div class="button-row">
+              <a class="button" href="./get-involved.html">Get involved</a>
+              <a class="button-ghost" href="./submit.html">Open submit flow</a>
+            </div>
+          </div>
+
+          <aside class="surface-panel surface-panel--dark">
+            <div class="eyebrow">Explore</div>
+            <h3>Use multiple entry points</h3>
+            <p>Visitors can move through the site by archive, by guide, by submissions, or by map as the project grows.</p>
+            <a class="text-link" href="./map.html">Open the map</a>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap surface-panel quote-card">
+          <div class="eyebrow">Support</div>
+          <h2>Point this call to action wherever your project needs it.</h2>
+          <p>Wire the buttons to donations, merch, your main channel, a volunteer form, or a coalition page. The template keeps the surface area small on purpose.</p>
+          <div class="button-row">
+            <a class="button" href="./get-involved.html">Support options</a>
+            <a class="button-ghost" href="./submit.html">Private intake</a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__grid">
+      <div>
+        <div class="eyebrow">Nostr Site Template</div>
+        <h3>Portable publishing for small teams.</h3>
+        <p>Use this starter when you want markdown, relay-backed state, and a low-maintenance public site instead of a heavier CMS stack.</p>
+      </div>
+      <div>
+        <h3>Explore</h3>
+        <ul>
+          <li><a href="./blog.html">Blog</a></li>
+          <li><a href="./guide.html">Instructions / Tutorial</a></li>
+          <li><a href="./submit.html">Submit</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Support</h3>
+        <ul>
+          <li><a href="./get-involved.html">Donate / Get involved</a></li>
+          <li><a href="./about.html">About</a></li>
+          <li><a href="./merch.html">Merch</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+dist/
+node_modules/
+peer-pinner/node_modules/

@@ -1,0 +1,17 @@
+{
+  "name": "nostr-site-peer-pinner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/peer-pinner.js",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node dist/peer-pinner.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.1"
+  }
+}

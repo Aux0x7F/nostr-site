@@ -1,0 +1,15 @@
+{
+  "name": "nostr-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:support-lib": "node support-lib/build.mjs",
+    "build:all": "npm run build && npm run build:support-lib && npm --prefix peer-pinner run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.1",
+    "html-minifier-terser": "^7.2.0"
+  }
+}

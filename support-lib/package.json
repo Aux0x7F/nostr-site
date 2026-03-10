@@ -1,0 +1,17 @@
+{
+  "name": "nostr-site-support",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "./dist/nostr-site-support.esm.js",
+  "main": "./dist/nostr-site-support.iife.js",
+  "exports": {
+    ".": {
+      "import": "./dist/nostr-site-support.esm.js",
+      "default": "./dist/nostr-site-support.iife.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

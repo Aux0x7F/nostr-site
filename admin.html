@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log In | Nostr Site Template</title>
+  <meta name="description" content="Log in to manage your profile, comments, submissions, and role-based workspace tools.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body data-page="workspace">
+  <header class="site-header">
+    <div class="wrap site-header__inner">
+      <a class="brand" href="./index.html">
+        <span class="brand__mark">NS</span>
+        <span class="brand__text">
+          <strong>Nostr Site</strong>
+          <span>Static-first publishing with relay-backed collaboration.</span>
+        </span>
+      </a>
+      <button class="nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="siteNav"></button>
+      <nav id="siteNav" class="site-nav" data-site-nav></nav>
+    </div>
+  </header>
+
+  <div class="page-shell">
+    <main data-workspace-page>
+      <section class="hero">
+        <div class="wrap">
+          <div class="eyebrow">Account</div>
+          <h1 data-workspace-title>Log in</h1>
+          <p class="hero__lede" data-workspace-lede></p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap" data-workspace-shell></div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__grid">
+      <div>
+        <div class="eyebrow">Nostr Site Template</div>
+        <h3>Portable publishing for small teams.</h3>
+        <p>Shared accounts, review notes, moderation, and draft publishing live here while the public site stays lean.</p>
+      </div>
+      <div>
+        <h3>Explore</h3>
+        <ul>
+          <li><a href="./blog.html">Blog</a></li>
+          <li><a href="./map.html">Map</a></li>
+          <li><a href="./submit.html">Submit</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Support</h3>
+        <ul>
+          <li><a href="./get-involved.html">Get involved</a></li>
+          <li><a href="./about.html">About</a></li>
+          <li><a href="./index.html">Home</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+  <script type="module" src="./admin.js"></script>
+</body>
+</html>

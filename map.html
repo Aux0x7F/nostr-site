@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Map | Nostr Site Template</title>
+  <meta name="description" content="Entity map and geographic index for the Nostr Site template.">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body data-page="map">
+  <header class="site-header">
+    <div class="wrap site-header__inner">
+      <a class="brand" href="./index.html">
+        <span class="brand__mark">NS</span>
+        <span class="brand__text">
+          <strong>Nostr Site</strong>
+          <span>Static-first publishing with relay-backed collaboration.</span>
+        </span>
+      </a>
+      <button class="nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="siteNav"></button>
+      <nav id="siteNav" class="site-nav" data-site-nav></nav>
+    </div>
+  </header>
+
+  <div class="page-shell">
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <div class="eyebrow">Map</div>
+          <h1>Browse approved entities geographically.</h1>
+          <p class="hero__lede">Approved entities appear here as an alternate way to move through related posts and places. If the relay layer is unavailable, the map stays muted rather than breaking the rest of the site.</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap map-shell">
+          <section class="surface-panel">
+            <div class="eyebrow">Locations</div>
+            <div class="map-board map-board--leaflet" data-map-canvas></div>
+          </section>
+
+          <section class="surface-panel">
+            <div class="eyebrow">Entity index</div>
+            <div class="map-list" data-map-list></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__grid">
+      <div>
+        <div class="eyebrow">Nostr Site Template</div>
+        <h3>Portable publishing for small teams.</h3>
+        <p>The map is an alternate table of contents for entities and places tied to published work.</p>
+      </div>
+      <div>
+        <h3>Explore</h3>
+        <ul>
+          <li><a href="./blog.html">Blog</a></li>
+          <li><a href="./guide.html">Guide</a></li>
+          <li><a href="./submit.html">Submit</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Support</h3>
+        <ul>
+          <li><a href="./get-involved.html">Get involved</a></li>
+          <li><a href="./about.html">About</a></li>
+          <li><a href="./index.html">Home</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

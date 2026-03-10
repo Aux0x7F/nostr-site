@@ -1,0 +1,37 @@
+{
+  "entities": [
+    {
+      "slug": "south-river-warehouse",
+      "name": "South River Warehouse",
+      "location": "South River, Arizona",
+      "type": "warehouse",
+      "lat": 33.4484,
+      "lng": -112.074,
+      "notes": "Placeholder baked entity for map and blog enrichment demos.",
+      "aliases": ["South River Depot"],
+      "status": "approved"
+    },
+    {
+      "slug": "harbor-route-terminal",
+      "name": "Harbor Route Terminal",
+      "location": "Long Beach, California",
+      "type": "terminal",
+      "lat": 33.7701,
+      "lng": -118.1937,
+      "notes": "Placeholder baked entity showing how a second location links related blog posts.",
+      "aliases": ["Route Terminal"],
+      "status": "approved"
+    },
+    {
+      "slug": "civic-archive-annex",
+      "name": "Civic Archive Annex",
+      "location": "Salt Lake City, Utah",
+      "type": "archive",
+      "lat": 40.7608,
+      "lng": -111.891,
+      "notes": "Placeholder baked entity for a quieter, document-heavy sample post.",
+      "aliases": ["Archive Annex"],
+      "status": "approved"
+    }
+  ]
+}

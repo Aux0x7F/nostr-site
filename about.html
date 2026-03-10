@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About | Nostr Site Template</title>
+  <meta name="description" content="About the Nostr Site template and the kinds of projects it is meant to support.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body data-page="about">
+  <header class="site-header">
+    <div class="wrap site-header__inner">
+      <a class="brand" href="./index.html">
+        <span class="brand__mark">NS</span>
+        <span class="brand__text">
+          <strong>Nostr Site</strong>
+          <span>Static-first publishing with relay-backed collaboration.</span>
+        </span>
+      </a>
+      <button class="nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="siteNav"></button>
+      <nav id="siteNav" class="site-nav" data-site-nav></nav>
+    </div>
+  </header>
+
+  <div class="page-shell">
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <div class="eyebrow">About</div>
+          <h1>A starter for campaigns, research archives, and small publishing teams.</h1>
+          <p class="hero__lede">This template is designed for groups that want a plain public site, an easy markdown publishing path, and a live collaboration layer without standing up a conventional backend.</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap card-grid">
+          <article class="info-card">
+            <div class="eyebrow">Purpose</div>
+            <h3>Start from a clear mission</h3>
+            <p>Replace this card with the plain-language reason your project exists and what you want visitors to understand in under a minute.</p>
+          </article>
+          <article class="info-card">
+            <div class="eyebrow">Approach</div>
+            <h3>Keep the workflow lean</h3>
+            <p>Static pages handle publishing. Relay state handles collaboration, moderation, and the content that should not be hand-edited directly on every update.</p>
+          </article>
+          <article class="info-card">
+            <div class="eyebrow">Audience</div>
+            <h3>Write for more than one audience</h3>
+            <p>Good archive pages work for casual readers, collaborators, journalists, members, and anyone trying to pick up the thread later.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap page-layout">
+          <div class="surface-panel">
+            <div class="eyebrow">Replace this section</div>
+            <h2>Use the about page to make the project legible.</h2>
+            <p>Explain what the project covers, how it works, who it serves, and why the archive matters. Keep the tone direct and leave the org-chart prose out.</p>
+            <p>This page can also hold collaborator background, press details, coalition context, or a short editorial standard if that helps the project feel trustworthy.</p>
+          </div>
+
+          <aside class="surface-panel surface-panel--dark">
+            <div class="eyebrow">Where people go next</div>
+            <h3>Point visitors somewhere useful</h3>
+            <p>Most people should leave this page for the archive, the guide, the map, or your main support path.</p>
+            <div class="button-row">
+              <a class="button" href="./blog.html">Browse posts</a>
+              <a class="button-ghost" href="./get-involved.html">Support options</a>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap site-footer__grid">
+      <div>
+        <div class="eyebrow">Nostr Site Template</div>
+        <h3>Portable publishing for small teams.</h3>
+        <p>About pages should explain the project clearly without forcing visitors through institutional filler.</p>
+      </div>
+      <div>
+        <h3>Explore</h3>
+        <ul>
+          <li><a href="./blog.html">Blog</a></li>
+          <li><a href="./guide.html">Guide</a></li>
+          <li><a href="./submit.html">Submit</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Support</h3>
+        <ul>
+          <li><a href="./get-involved.html">Donate / Get involved</a></li>
+          <li><a href="./merch.html">Merch</a></li>
+          <li><a href="./index.html">Home</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
