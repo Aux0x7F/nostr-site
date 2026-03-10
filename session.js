@@ -18,6 +18,10 @@ export const {
   getStoredSession,
   saveSession,
   clearSession,
+  getStoredGuestSession,
+  saveGuestSession,
+  clearGuestSession,
+  getOrCreateGuestSession,
   signInWithCredentials,
   rebroadcastAccount,
   deriveSecretKeyHex

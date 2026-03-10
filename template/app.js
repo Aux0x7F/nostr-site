@@ -13,7 +13,7 @@ import {
   loadPublicState,
   publishTaggedJson
 } from "../nostr.js";
-import { clearSession, getStoredSession } from "../session.js";
+import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../session.js";
 
 const NAV_KEYS = {
   home: ["home"],
@@ -35,6 +35,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 const state = {
   session: getStoredSession(),
+  guestSession: getStoredGuestSession(),
   viewer: null,
   publicState: null,
   postsPromise: null,
@@ -119,24 +120,9 @@ function initNavigation() {
   document.addEventListener("error", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLImageElement) || !target.matches("[data-avatar-sha]")) return;
-    if (!state.session?.secretKeyHex || target.dataset.refreshing === "yes") return;
-    const reference = {
-      sha256: target.dataset.avatarSha || "",
-      url: target.dataset.avatarUrl || target.currentSrc || target.src,
-      access: "public",
-      cipher: "none",
-      type: target.dataset.avatarType || "image/jpeg",
-      name: target.dataset.avatarName || "avatar"
-    };
+    if (target.dataset.refreshing === "yes") return;
     target.dataset.refreshing = "yes";
-    void ensureBlobAvailable(state.session.secretKeyHex, reference)
-      .then(() => {
-        const src = reference.url;
-        target.src = `${src}${src.includes("?") ? "&" : "?"}refresh=${Date.now()}`;
-      })
-      .catch(() => {
-        target.dataset.refreshing = "no";
-      });
+    void refreshAvatarFromCache(target);
   }, true);
 
   void bootstrapRelayState();
@@ -145,6 +131,9 @@ function initNavigation() {
 async function bootstrapRelayState() {
   try {
     await ensureEventToolsLoaded();
+    if (!state.guestSession) {
+      state.guestSession = await getOrCreateGuestSession().catch(() => null);
+    }
     state.publicState = await loadPublicState();
     if (state.session) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
@@ -378,15 +367,15 @@ async function renderComments(postSlug, publicState) {
             <div class="status-box" data-comment-status></div>
           </form>
         `
-        : `<div class="empty-state">Log in to comment on blog posts.</div>`
+        : `<div class="empty-state">Log in to join the discussion.</div>`
     }
-    <div class="comment-list">
-      ${
-        comments.length
-          ? comments.map((comment) => renderComment(comment, publicState, isAdmin)).join("")
-          : `<div class="empty-state">No comments yet.</div>`
-      }
-    </div>
+    ${
+      comments.length
+        ? `<div class="comment-list">${comments.map((comment) => renderComment(comment, publicState, isAdmin)).join("")}</div>`
+        : isLoggedIn
+          ? `<div class="comment-list"><div class="empty-state">No comments yet.</div></div>`
+          : ""
+    }
   `;
 
   const form = panel.querySelector("[data-comment-form]");
@@ -671,6 +660,9 @@ async function getPublicState() {
   if (state.publicState) return state.publicState;
   try {
     await ensureEventToolsLoaded();
+    if (!state.guestSession) {
+      state.guestSession = await getOrCreateGuestSession().catch(() => null);
+    }
     state.publicState = await loadPublicState();
     if (state.session && !state.viewer) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
@@ -694,6 +686,34 @@ async function getViewer() {
   await ensureEventToolsLoaded();
   state.viewer = deriveIdentity(state.session.secretKeyHex);
   return state.viewer;
+}
+
+async function getRequestSignerSecretKey() {
+  if (state.session?.secretKeyHex) return state.session.secretKeyHex;
+  if (state.guestSession?.secretKeyHex) return state.guestSession.secretKeyHex;
+  await ensureEventToolsLoaded();
+  state.guestSession = await getOrCreateGuestSession().catch(() => null);
+  return state.guestSession?.secretKeyHex || "";
+}
+
+async function refreshAvatarFromCache(target) {
+  try {
+    const secretKeyHex = await getRequestSignerSecretKey();
+    if (!secretKeyHex) throw new Error("No request signer available.");
+    const reference = {
+      sha256: target.dataset.avatarSha || "",
+      url: target.dataset.avatarUrl || target.currentSrc || target.src,
+      access: "public",
+      cipher: "none",
+      type: target.dataset.avatarType || "image/jpeg",
+      name: target.dataset.avatarName || "avatar"
+    };
+    await ensureBlobAvailable(secretKeyHex, reference);
+    const src = reference.url;
+    target.src = `${src}${src.includes("?") ? "&" : "?"}refresh=${Date.now()}`;
+  } catch {
+    target.dataset.refreshing = "no";
+  }
 }
 
 async function fetchJson(path) {

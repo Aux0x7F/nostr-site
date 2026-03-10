@@ -6,6 +6,7 @@ export function createDeterministicSessionApi(config, deps) {
     publishTaggedJson
   } = deps;
   const storageKey = `${config.nostr.storageNamespace}.session`;
+  const guestStorageKey = `${config.nostr.storageNamespace}.guest`;
 
   function getStoredSession() {
     try {
@@ -37,6 +38,41 @@ export function createDeterministicSessionApi(config, deps) {
     localStorage.removeItem(storageKey);
   }
 
+  function getStoredGuestSession() {
+    try {
+      const raw = localStorage.getItem(guestStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if (!parsed.secretKeyHex) return null;
+      return {
+        kind: "guest",
+        guestId: String(parsed.guestId || "").trim(),
+        secretKeyHex: String(parsed.secretKeyHex || "").trim().toLowerCase(),
+        pubkey: String(parsed.pubkey || "").trim().toLowerCase(),
+        createdAt: String(parsed.createdAt || "").trim()
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveGuestSession(session) {
+    localStorage.setItem(
+      guestStorageKey,
+      JSON.stringify({
+        guestId: String(session.guestId || "").trim(),
+        secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase(),
+        pubkey: String(session.pubkey || "").trim().toLowerCase(),
+        createdAt: String(session.createdAt || "").trim()
+      })
+    );
+  }
+
+  function clearGuestSession() {
+    localStorage.removeItem(guestStorageKey);
+  }
+
   async function signInWithCredentials(username, password) {
     const normalized = normalizeUsername(username);
     if (!normalized) throw new Error("Enter a username.");
@@ -51,6 +87,31 @@ export function createDeterministicSessionApi(config, deps) {
     };
     saveSession(session);
     return session;
+  }
+
+  async function getOrCreateGuestSession() {
+    const existing = getStoredGuestSession();
+    if (existing?.secretKeyHex && existing?.pubkey) return existing;
+    await ensureEventToolsLoaded();
+    let attempt = 0;
+    while (attempt < 8) {
+      const secretKeyHex = await randomSecretKeyHex();
+      try {
+        const identity = deriveIdentity(secretKeyHex);
+        const session = {
+          kind: "guest",
+          guestId: await randomGuestId(),
+          secretKeyHex,
+          pubkey: identity.pubkey,
+          createdAt: new Date().toISOString()
+        };
+        saveGuestSession(session);
+        return session;
+      } catch {
+        attempt += 1;
+      }
+    }
+    throw new Error("Could not derive a valid guest identity.");
   }
 
   async function rebroadcastAccount(session, profile = {}) {
@@ -116,6 +177,10 @@ export function createDeterministicSessionApi(config, deps) {
     getStoredSession,
     saveSession,
     clearSession,
+    getStoredGuestSession,
+    saveGuestSession,
+    clearGuestSession,
+    getOrCreateGuestSession,
     signInWithCredentials,
     rebroadcastAccount,
     deriveSecretKeyHex
@@ -132,4 +197,16 @@ async function digestText(value) {
 
 function bytesToHex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function randomSecretKeyHex() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+}
+
+async function randomGuestId() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return `guest-${bytesToHex(bytes)}`;
 }

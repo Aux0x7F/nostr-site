@@ -6,6 +6,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - relay-backed collaborative state
 - optional cache-backed blobs for avatars and encrypted attachments
 - deterministic username/password accounts
+- persistent guest identities for signed public requests
 - encrypted submission intake
 - a route from live relay state to committed cleartext content
 - a reusable browser support library for follow-on sites
@@ -85,6 +86,8 @@ The blob path is intentionally split:
 5. a peer pinner re-uploads the retained blob to the cache host and publishes a fulfillment event
 
 That keeps the pinner in a peer-retention role instead of making it the first-hop blob origin.
+
+Anonymous visitors can still participate in public cache refreshes through a persistent local guest identity. That guest signer is only intended for public actions such as blob refresh and visitor-side telemetry, not authenticated workspace actions.
 
 ## Build
 

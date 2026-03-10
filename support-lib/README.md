@@ -21,6 +21,8 @@ Minified reusable browser library built from the `portable/` source layer.
 - signed `blobRequest` events on cache miss
 - polling relay state for `blobFulfillment` before retrying reads
 
+`createDeterministicSessionApi` now supports both named account sessions and persistent guest identities for anonymous signed public actions.
+
 ## Build
 
 ```bash
