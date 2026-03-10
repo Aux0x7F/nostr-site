@@ -363,6 +363,7 @@ async function fetchPublicState() {
   if (!tools) return emptyPublicState("Nostr tools unavailable.", seedEntities);
 
   try {
+    const visitSince = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30;
     const filters = [
       {
         kinds: [
@@ -382,6 +383,12 @@ async function fetchPublicState() {
         ],
         "#t": [config.nostr.appTag],
         limit: config.nostr.publicLoadLimit
+      },
+      {
+        kinds: [config.nostr.kinds.visitPulse],
+        "#t": [config.nostr.appTag],
+        since: visitSince,
+        limit: Math.max(800, config.nostr.publicLoadLimit * 4)
       }
     ];
     if (config.nostr.inboxPubkey) {
@@ -414,6 +421,7 @@ function buildPublicState(events, seedEntities = []) {
   const blobRequests = new Map();
   const blobFulfillments = new Map();
   const submissionCounters = new Map();
+  const visitEvents = [];
   const seenPubkeys = new Set();
 
   for (const event of events) {
@@ -593,6 +601,20 @@ function buildPublicState(events, seedEntities = []) {
       continue;
     }
 
+    if (kind === config.nostr.kinds.visitPulse) {
+      const payload = parseObject(event.content);
+      const pubkey = normalizePubkey(event.pubkey);
+      if (!pubkey) continue;
+      visitEvents.push({
+        id: event.id,
+        pubkey,
+        page: cleanSlug(payload?.page || firstTag(event, "k")),
+        day: String(payload?.day || "").trim(),
+        created_at: toUnix(event.created_at)
+      });
+      continue;
+    }
+
     if (kind === config.nostr.kinds.commentMod) {
       const payload = parseObject(event.content);
       const targetId = String(payload?.target_id || firstTag(event, "e") || "").trim();
@@ -602,6 +624,7 @@ function buildPublicState(events, seedEntities = []) {
           pubkey: normalizePubkey(event.pubkey),
           target_id: targetId,
           action,
+          note: String(payload?.note || "").trim(),
           created_at: toUnix(event.created_at),
           id: event.id
         });
@@ -628,7 +651,7 @@ function buildPublicState(events, seedEntities = []) {
   const adminState = computeAdminState(claims, roles);
   const admins = new Set(adminState.admins);
   const moderation = computeLatestModeration(userModEvents, admins);
-  const hiddenComments = computeHiddenComments(commentModEvents, admins);
+  const commentModeration = computeCommentModeration(commentModEvents, admins);
   const submissionStatuses = computeSubmissionStatuses(submissionStatusEvents, admins);
 
   const mergedEntities = new Map();
@@ -646,9 +669,18 @@ function buildPublicState(events, seedEntities = []) {
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
-  const visibleComments = [...comments.values()]
-    .filter((comment) => !hiddenComments.has(comment.id))
+  const allComments = [...comments.values()]
+    .map((comment) => {
+      const mod = commentModeration.get(comment.id) || null;
+      return {
+        ...comment,
+        visibility: mod?.action === "hide" ? "hidden" : "visible",
+        moderation: mod
+      };
+    })
     .sort(compareEventAsc);
+  const visibleComments = allComments.filter((comment) => comment.visibility !== "hidden");
+  const hiddenComments = allComments.filter((comment) => comment.visibility === "hidden");
   const commentsByPost = groupBy(visibleComments, "post_slug");
   const commentsByAuthor = groupBy(visibleComments, "author");
 
@@ -659,12 +691,14 @@ function buildPublicState(events, seedEntities = []) {
       (submissionCountByAuthor.get(entry.author) || 0) + 1
     );
   }
+  const visitMetrics = computeVisitMetrics(visitEvents);
 
   const allPubkeys = new Set([
     ...seenPubkeys,
     ...nameClaims.keys(),
     ...profiles.keys(),
     ...submissionCountByAuthor.keys(),
+    ...allComments.map((comment) => comment.author),
     ...commentsByAuthor.keys(),
     ...admins
   ]);
@@ -706,20 +740,28 @@ function buildPublicState(events, seedEntities = []) {
     entities: entityList,
     approvedEntities: entityList.filter((entity) => entity.status === "approved"),
     drafts: [...drafts.values()].sort((left, right) => right.date.localeCompare(left.date)),
+    allComments,
     comments: visibleComments,
+    hiddenComments,
     commentsByPost,
     commentsByAuthor,
+    commentModeration,
     blobRequests,
     blobFulfillments,
     submissionStatuses,
     submissionCountByAuthor,
+    visits: visitMetrics.events,
     metrics: {
       userCount: users.length,
       adminCount: adminState.admins.length,
       submissionCount: submissionCounters.size,
       commentCount: visibleComments.length,
+      hiddenCommentCount: hiddenComments.length,
       entityCount: entityList.length,
-      approvedEntityCount: entityList.filter((entity) => entity.status === "approved").length
+      approvedEntityCount: entityList.filter((entity) => entity.status === "approved").length,
+      visitorCount24h: visitMetrics.visitorCount24h,
+      visitorCount7d: visitMetrics.visitorCount7d,
+      visitEventCount7d: visitMetrics.visitEventCount7d
     },
     rawEvents: events.sort(compareEventDesc)
   };
@@ -770,18 +812,22 @@ function computeLatestModeration(events, admins) {
   return map;
 }
 
-function computeHiddenComments(events, admins) {
-  const hidden = new Set();
+function computeCommentModeration(events, admins) {
+  const moderation = new Map();
   const sorted = [...events].sort((left, right) => {
     if (left.created_at !== right.created_at) return left.created_at - right.created_at;
     return String(left.id || "").localeCompare(String(right.id || ""));
   });
   for (const event of sorted) {
     if (!admins.has(event.pubkey)) continue;
-    if (event.action === "hide") hidden.add(event.target_id);
-    if (event.action === "restore") hidden.delete(event.target_id);
+    moderation.set(event.target_id, {
+      action: event.action === "restore" ? "restore" : "hide",
+      note: String(event.note || "").trim(),
+      updated_at: event.created_at,
+      by: event.pubkey
+    });
   }
-  return hidden;
+  return moderation;
 }
 
 function computeSubmissionStatuses(events, admins) {
@@ -802,6 +848,29 @@ function computeSubmissionStatuses(events, admins) {
     });
   }
   return map;
+}
+
+function computeVisitMetrics(events) {
+  const sorted = [...events].sort(compareEventAsc);
+  const now = Math.floor(Date.now() / 1000);
+  const since24h = now - 60 * 60 * 24;
+  const since7d = now - 60 * 60 * 24 * 7;
+  const unique24h = new Set();
+  const unique7d = new Set();
+  let visitEventCount7d = 0;
+  for (const event of sorted) {
+    if (event.created_at >= since24h) unique24h.add(event.pubkey);
+    if (event.created_at >= since7d) {
+      unique7d.add(event.pubkey);
+      visitEventCount7d += 1;
+    }
+  }
+  return {
+    events: sorted,
+    visitorCount24h: unique24h.size,
+    visitorCount7d: unique7d.size,
+    visitEventCount7d
+  };
 }
 
 function groupSubmissions(items) {
@@ -836,20 +905,28 @@ function emptyPublicState(error, seedEntities = []) {
     entities,
     approvedEntities,
     drafts: [],
+    allComments: [],
     comments: [],
+    hiddenComments: [],
     commentsByPost: new Map(),
     commentsByAuthor: new Map(),
+    commentModeration: new Map(),
     blobRequests: new Map(),
     blobFulfillments: new Map(),
     submissionStatuses: new Map(),
     submissionCountByAuthor: new Map(),
+    visits: [],
     metrics: {
       userCount: 0,
       adminCount: 0,
       submissionCount: 0,
       commentCount: 0,
+      hiddenCommentCount: 0,
       entityCount: entities.length,
-      approvedEntityCount: approvedEntities.length
+      approvedEntityCount: approvedEntities.length,
+      visitorCount24h: 0,
+      visitorCount7d: 0,
+      visitEventCount7d: 0
     },
     rawEvents: []
   };

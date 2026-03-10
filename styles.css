@@ -304,14 +304,17 @@ h3 {
   align-items: center;
   justify-content: center;
   min-width: 1.5rem;
+  width: 1.5rem;
   min-height: 1.5rem;
+  flex: 0 0 auto;
   margin: 0 auto;
   text-align: center;
   line-height: 1;
 }
 
 .profile-menu__toggle.is-wordmark {
-  min-width: 4.9rem;
+  min-width: 5.4rem;
+  padding: 0 0.85rem;
 }
 
 .profile-menu__toggle.has-avatar {
@@ -320,7 +323,9 @@ h3 {
 }
 
 .profile-menu__badge.is-wordmark {
+  width: 100%;
   font-size: 0.78rem;
+  justify-content: center;
 }
 
 .profile-menu__badge.has-avatar {
@@ -1114,6 +1119,61 @@ h3 {
 
 .button-row--tight {
   margin-top: 0.8rem;
+}
+
+.comment-note-field {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  font-weight: 600;
+}
+
+.comment-note-field textarea {
+  min-height: 5.5rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  font: inherit;
+}
+
+.picker-results {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.picker-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(18, 18, 18, 0.08);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-chip strong {
+  font-size: 0.95rem;
+}
+
+.picker-chip span {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+.picker-hint {
+  padding: 0.7rem 0.9rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(18, 18, 18, 0.14);
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.54);
+  font-size: 0.92rem;
 }
 
 .modal-backdrop {

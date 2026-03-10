@@ -52,7 +52,8 @@ export const SITE = Object.freeze({
       submissionStatus: 34137,
       adminKeyShare: 34138,
       blobRequest: 34139,
-      blobFulfillment: 34140
+      blobFulfillment: 34140,
+      visitPulse: 34141
     }
   }
 });

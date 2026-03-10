@@ -1,11 +1,14 @@
 import SITE from "../site-config.js";
+import { createUniqueSlug, splitTags } from "../content-utils.js";
 import {
+  cleanSlug,
   deriveIdentity,
   uploadEncryptedBlob,
   ensureEventToolsLoaded,
   loadPublicState,
   loadSubmissionThread,
   loadUserSubmissions,
+  publishTaggedJson,
   publishSubmission,
   publishSubmissionChat
 } from "../nostr.js";
@@ -47,6 +50,18 @@ function bindSubmitPage() {
       return;
     }
 
+    const entityPick = target.closest("[data-submit-entity-pick]");
+    if (entityPick) {
+      applyEntityPick(entityPick);
+      return;
+    }
+
+    const locationPick = target.closest("[data-submit-location-pick]");
+    if (locationPick) {
+      applyLocationPick(locationPick);
+      return;
+    }
+
     if (target.closest("[data-submit-modal-close]")) {
       submitState.formModal = null;
       submitState.chatModal = null;
@@ -64,6 +79,14 @@ function bindSubmitPage() {
     }
     if (form.matches("[data-submission-chat-form]")) {
       await handleChatSend(form);
+    }
+  });
+
+  shell.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.matches("[data-submit-entity-input], [data-submit-location-input]")) {
+      hydrateSubmissionEnhancements();
     }
   });
 }
@@ -122,11 +145,13 @@ function renderSubmitPage() {
     ${renderSubmissionModal()}
     ${renderSubmissionChatModal()}
   `;
+  hydrateSubmissionEnhancements();
 }
 
 function renderSubmissionRow(submission) {
   const latest = submission.latest?.payload || {};
   const status = submitState.publicState?.submissionStatuses.get(submission.id)?.status || "received";
+  const entityRefs = Array.isArray(latest.entity_refs) ? latest.entity_refs : [];
   return `
     <article class="roster-item">
       <div class="workspace-list__row">
@@ -139,6 +164,11 @@ function renderSubmissionRow(submission) {
         </div>
       </div>
       <span>${escapeHtml(trimmed(latest.details || "", 180))}</span>
+      ${
+        entityRefs.length
+          ? `<span class="muted-text">Entities: ${escapeHtml(entityRefs.map(resolveEntityDisplayValue).join(", "))}</span>`
+          : ""
+      }
       <div class="button-row button-row--tight">
         <button class="button-ghost" type="button" data-open-submission-modal="${submission.id}">Edit</button>
         <button class="button-ghost" type="button" data-open-submission-chat="${submission.id}">Chat</button>
@@ -182,9 +212,36 @@ function renderSubmissionModal() {
             <input name="location" type="text" maxlength="160" value="${escapeAttribute(payload.location || "")}">
           </label>
           <label>
+            <span>Related entities</span>
+            <input name="entityRefs" type="text" data-submit-entity-input placeholder="Search existing entities or list comma-separated names" value="${escapeAttribute((payload.entity_refs || []).map(resolveEntityDisplayValue).join(", "))}">
+            <div class="picker-results" data-submit-entity-results></div>
+          </label>
+          <label>
             <span>Details</span>
             <textarea name="details" required>${escapeHtml(payload.details || "")}</textarea>
           </label>
+          <div class="status-box">If the entity is not listed yet, suggest a new one below for admin review.</div>
+          <div class="tip-form__split">
+            <label>
+              <span>Suggested entity name</span>
+              <input name="suggestedEntityName" type="text" maxlength="140" value="${escapeAttribute(payload.suggested_entity?.name || "")}">
+            </label>
+            <label>
+              <span>Suggested entity location</span>
+              <input name="suggestedEntityLocation" type="text" maxlength="160" data-submit-location-input value="${escapeAttribute(payload.suggested_entity?.location || "")}">
+              <div class="picker-results" data-submit-location-results></div>
+            </label>
+          </div>
+          <div class="tip-form__split">
+            <label>
+              <span>Suggested entity type</span>
+              <input name="suggestedEntityType" type="text" maxlength="80" placeholder="facility, office, store" value="${escapeAttribute(payload.suggested_entity?.type || "")}">
+            </label>
+            <label>
+              <span>Suggested entity note</span>
+              <input name="suggestedEntityNotes" type="text" maxlength="200" value="${escapeAttribute(payload.suggested_entity?.notes || "")}">
+            </label>
+          </div>
           <label>
             <span>Source links</span>
             <textarea name="sourceLinks">${escapeHtml((payload.source_links || []).join("\n"))}</textarea>
@@ -290,10 +347,19 @@ function workspaceOpenSubmission(submissionId) {
 async function handleSubmissionSave(form) {
   const status = form.querySelector("[data-submission-status]");
   try {
-    const payload = await buildSubmissionPayload(form, submitState.formModal?.payload || {});
-    await publishSubmission(submitState.session.secretKeyHex, payload);
+    const next = await buildSubmissionDraft(form, submitState.formModal?.payload || {});
+    if (next.pendingEntity) {
+      const entity = await publishPendingEntity(next.pendingEntity);
+      if (entity?.slug && !next.payload.entity_refs.includes(entity.slug)) {
+        next.payload.entity_refs.push(entity.slug);
+      }
+      next.payload.suggested_entity = entity
+        ? { slug: entity.slug, name: entity.name, location: entity.location, type: entity.type, notes: entity.notes }
+        : next.payload.suggested_entity;
+    }
+    await publishSubmission(submitState.session.secretKeyHex, next.payload);
     if (status) {
-      status.textContent = "Submission revision published.";
+      status.textContent = next.pendingEntity ? "Submission revision and pending entity published." : "Submission revision published.";
       status.dataset.state = "success";
     }
     submitState.formModal = null;
@@ -329,28 +395,42 @@ async function handleChatSend(form) {
   await hydrateChatModal();
 }
 
-async function buildSubmissionPayload(form, existingPayload) {
+async function buildSubmissionDraft(form, existingPayload) {
   const formData = new FormData(form);
   const nextAttachment = await uploadSubmissionAttachment(formData.get("attachment"));
   const sourceLinks = String(formData.get("sourceLinks") || "")
     .split(/\r?\n/)
     .map((value) => value.trim())
     .filter(Boolean);
+  const suggestedEntity = buildSuggestedEntity(formData, existingPayload.suggested_entity);
 
   return {
-    submission_id: String(formData.get("submissionId") || "").trim() || cleanSubject(String(formData.get("subject") || "")),
-    category: String(formData.get("category") || "").trim(),
-    subject: String(formData.get("subject") || "").trim(),
-    location: String(formData.get("location") || "").trim(),
-    details: String(formData.get("details") || "").trim(),
-    source_links: sourceLinks,
-    contact: {
-      name: String(formData.get("name") || "").trim(),
-      email: String(formData.get("email") || "").trim(),
-      preferred_method: String(formData.get("contactMethod") || "").trim()
+    payload: {
+      submission_id: String(formData.get("submissionId") || "").trim() || cleanSubject(String(formData.get("subject") || "")),
+      category: String(formData.get("category") || "").trim(),
+      subject: String(formData.get("subject") || "").trim(),
+      location: String(formData.get("location") || "").trim(),
+      details: String(formData.get("details") || "").trim(),
+      entity_refs: resolveEntityRefs(String(formData.get("entityRefs") || "")),
+      source_links: sourceLinks,
+      contact: {
+        name: String(formData.get("name") || "").trim(),
+        email: String(formData.get("email") || "").trim(),
+        preferred_method: String(formData.get("contactMethod") || "").trim()
+      },
+      consent_to_follow_up: formData.has("consent"),
+      attachment: nextAttachment || existingPayload.attachment || null,
+      suggested_entity: suggestedEntity
+        ? {
+            slug: suggestedEntity.slug,
+            name: suggestedEntity.name,
+            location: suggestedEntity.location,
+            type: suggestedEntity.type,
+            notes: suggestedEntity.notes
+          }
+        : null
     },
-    consent_to_follow_up: formData.has("consent"),
-    attachment: nextAttachment || existingPayload.attachment || null
+    pendingEntity: suggestedEntity
   };
 }
 
@@ -377,6 +457,168 @@ function cleanSubject(value) {
 
 function renderOption(value, current) {
   return `<option value="${value}" ${current === value ? "selected" : ""}>${value}</option>`;
+}
+
+function hydrateSubmissionEnhancements() {
+  renderEntityResults();
+  renderLocationResults();
+}
+
+function renderEntityResults() {
+  const host = document.querySelector("[data-submit-entity-results]");
+  const input = document.querySelector("[data-submit-entity-input]");
+  if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+  const query = lastCommaValue(input.value);
+  const matches = matchEntities(query).slice(0, 6);
+  if (!query) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = matches.length
+    ? matches
+        .map(
+          (entity) => `
+            <button class="picker-chip" type="button" data-submit-entity-pick="${escapeAttribute(entity.slug)}">
+              <strong>${escapeHtml(entity.name)}</strong>
+              <span>${escapeHtml(entity.location)}</span>
+            </button>
+          `
+        )
+        .join("")
+    : `<div class="picker-hint">No existing entity matches. Use the suggested entity fields to add a new one for review.</div>`;
+}
+
+function renderLocationResults() {
+  const host = document.querySelector("[data-submit-location-results]");
+  const input = document.querySelector("[data-submit-location-input]");
+  if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+  const query = input.value.trim().toLowerCase();
+  const matches = uniqueLocations()
+    .filter((location) => !query || location.toLowerCase().includes(query))
+    .slice(0, 6);
+  if (!query && !matches.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = matches.length
+    ? matches
+        .map(
+          (location) => `
+            <button class="picker-chip" type="button" data-submit-location-pick="${escapeAttribute(location)}">
+              <strong>${escapeHtml(location)}</strong>
+            </button>
+          `
+        )
+        .join("")
+    : `<div class="picker-hint">No known location matches. Keep the typed value to propose a new one.</div>`;
+}
+
+function applyEntityPick(button) {
+  const slug = button.getAttribute("data-submit-entity-pick") || "";
+  const entity = resolveEntityByNameOrSlug(slug);
+  const input = document.querySelector("[data-submit-entity-input]");
+  if (!entity || !(input instanceof HTMLInputElement)) return;
+  const existing = resolveEntityRefs(input.value);
+  input.value = dedupe([...existing, entity.slug]).map(resolveEntityDisplayValue).join(", ");
+  hydrateSubmissionEnhancements();
+}
+
+function applyLocationPick(button) {
+  const value = button.getAttribute("data-submit-location-pick") || "";
+  const input = document.querySelector("[data-submit-location-input]");
+  if (!(input instanceof HTMLInputElement)) return;
+  input.value = value;
+  hydrateSubmissionEnhancements();
+}
+
+function buildSuggestedEntity(formData, existingEntity) {
+  const name = String(formData.get("suggestedEntityName") || "").trim();
+  const location = String(formData.get("suggestedEntityLocation") || "").trim();
+  const type = String(formData.get("suggestedEntityType") || "").trim();
+  const notes = String(formData.get("suggestedEntityNotes") || "").trim();
+  if (!name && !location && !type && !notes) return null;
+  if (!name || !location) {
+    throw new Error("Suggested entities need at least a name and location.");
+  }
+  const existing = resolveEntityByNameOrSlug(name);
+  if (existing) {
+    return {
+      slug: existing.slug,
+      name: existing.name,
+      location: existing.location,
+      type: existing.type,
+      notes: existing.notes || notes
+    };
+  }
+  return {
+    slug: existingEntity?.slug || createUniqueSlug(name, (submitState.publicState?.entities || []).map((entity) => entity.slug)),
+    name,
+    location,
+    type: type || "entity",
+    notes
+  };
+}
+
+async function publishPendingEntity(entity) {
+  const existing = resolveEntityByNameOrSlug(entity.slug) || resolveEntityByNameOrSlug(entity.name);
+  if (existing) return existing;
+  await publishTaggedJson({
+    kind: SITE.nostr.kinds.entity,
+    secretKeyHex: submitState.session.secretKeyHex,
+    tags: [["d", entity.slug]],
+    content: {
+      slug: entity.slug,
+      name: entity.name,
+      location: entity.location,
+      type: entity.type,
+      notes: entity.notes,
+      status: "pending"
+    }
+  });
+  return entity;
+}
+
+function resolveEntityRefs(value) {
+  return dedupe(
+    splitTags(value)
+      .map((token) => resolveEntityByNameOrSlug(token)?.slug || cleanSlug(token))
+      .filter(Boolean)
+  );
+}
+
+function matchEntities(query) {
+  const clean = String(query || "").trim().toLowerCase();
+  if (!clean) return [];
+  return (submitState.publicState?.approvedEntities || []).filter((entity) => {
+    const haystacks = [entity.name, entity.slug, entity.location, ...(Array.isArray(entity.aliases) ? entity.aliases : [])]
+      .map((value) => String(value || "").toLowerCase())
+      .filter(Boolean);
+    return haystacks.some((value) => value.includes(clean));
+  });
+}
+
+function uniqueLocations() {
+  return dedupe((submitState.publicState?.entities || []).map((entity) => entity.location));
+}
+
+function resolveEntityByNameOrSlug(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return (submitState.publicState?.entities || []).find(
+    (entity) => entity.slug === cleanSlug(clean) || entity.name.toLowerCase() === clean
+  );
+}
+
+function resolveEntityDisplayValue(value) {
+  const entity = resolveEntityByNameOrSlug(value);
+  return entity?.name || String(value || "");
+}
+
+function lastCommaValue(value) {
+  return String(value || "").split(",").pop().trim();
+}
+
+function dedupe(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 function trimmed(value, length) {

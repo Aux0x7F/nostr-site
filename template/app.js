@@ -141,6 +141,7 @@ async function bootstrapRelayState() {
   } catch {
     state.publicState = null;
   }
+  void publishVisitPulse();
   renderNavigation();
 }
 
@@ -694,6 +695,31 @@ async function getRequestSignerSecretKey() {
   await ensureEventToolsLoaded();
   state.guestSession = await getOrCreateGuestSession().catch(() => null);
   return state.guestSession?.secretKeyHex || "";
+}
+
+async function publishVisitPulse() {
+  try {
+    const secretKeyHex = await getRequestSignerSecretKey();
+    if (!secretKeyHex || !SITE.nostr.kinds.visitPulse) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const markerKey = `${SITE.nostr.storageNamespace}.visitPulse.${day}`;
+    if (window.localStorage.getItem(markerKey)) return;
+    await publishTaggedJson({
+      kind: SITE.nostr.kinds.visitPulse,
+      secretKeyHex,
+      tags: [
+        ["t", SITE.nostr.appTag],
+        ["k", document.body.dataset.page || "site"]
+      ],
+      content: {
+        day,
+        page: document.body.dataset.page || "site"
+      }
+    });
+    window.localStorage.setItem(markerKey, String(Date.now()));
+  } catch {
+    return;
+  }
 }
 
 async function refreshAvatarFromCache(target) {

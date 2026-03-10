@@ -10,6 +10,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - encrypted submission intake
 - a route from live relay state to committed cleartext content
 - a reusable browser support library for follow-on sites
+- guest-backed visit telemetry for lightweight dashboard metrics
+- submit-side pending entity suggestions that admins can moderate later
 
 ## Structure
 
@@ -26,6 +28,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - generic placeholder content
 - reusable Nostr/CMS helpers in `portable/`
 - reusable blob upload + cache refresh helpers in `portable/`
+- pending entity publishing from non-admin submit flows
 - reusable minified browser library in `support-lib/`
 - bundled peer pinner package in `peer-pinner/`
 - build output to `dist/`

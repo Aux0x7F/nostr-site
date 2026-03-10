@@ -51,8 +51,9 @@ function bindWorkspace() {
       return;
     }
 
-    if (target.closest("[data-open-entity-modal]")) {
-      workspaceState.entityModal = { mode: "create" };
+    const openEntityModal = target.closest("[data-open-entity-modal]");
+    if (openEntityModal) {
+      workspaceState.entityModal = createEntityModalState(openEntityModal);
       renderWorkspace();
       return;
     }
@@ -77,6 +78,24 @@ function bindWorkspace() {
     const entityAction = target.closest("[data-entity-action]");
     if (entityAction) {
       await handleEntityAction(entityAction);
+      return;
+    }
+
+    const commentAction = target.closest("[data-comment-action]");
+    if (commentAction) {
+      await handleCommentAction(commentAction);
+      return;
+    }
+
+    const entityPick = target.closest("[data-entity-pick]");
+    if (entityPick) {
+      applyEntityPick(entityPick);
+      return;
+    }
+
+    const locationPick = target.closest("[data-location-pick]");
+    if (locationPick) {
+      applyLocationPick(locationPick);
       return;
     }
 
@@ -135,6 +154,14 @@ function bindWorkspace() {
       await handleChatSend(form);
     }
   });
+
+  shell.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.matches("[data-entity-picker-input], [data-location-input]")) {
+      hydrateWorkspaceEnhancements();
+    }
+  });
 }
 
 async function refreshWorkspace(force = false) {
@@ -186,6 +213,7 @@ function renderWorkspace() {
     ${renderEntityModal()}
     ${renderChatModal()}
   `;
+  hydrateWorkspaceEnhancements();
 }
 
 function renderLoginPane() {
@@ -238,12 +266,14 @@ function renderDashboardPane() {
   ).size;
   return `
     <section class="metric-grid">
+      <article class="metric-card"><strong>${metrics.visitorCount24h || 0}</strong><p>Visitors (24h)</p></article>
+      <article class="metric-card"><strong>${metrics.visitorCount7d || 0}</strong><p>Visitors (7d)</p></article>
       <article class="metric-card"><strong>${metrics.userCount || 0}</strong><p>Known users</p></article>
       <article class="metric-card"><strong>${metrics.submissionCount || 0}</strong><p>Submission threads</p></article>
       <article class="metric-card"><strong>${locationCount}</strong><p>Tracked locations</p></article>
       <article class="metric-card"><strong>${metrics.approvedEntityCount || 0}</strong><p>Approved entities</p></article>
       <article class="metric-card"><strong>${metrics.commentCount || 0}</strong><p>Visible comments</p></article>
-      <article class="metric-card"><strong>${workspaceState.publicState?.admins?.length || 0}</strong><p>Admins</p></article>
+      <article class="metric-card"><strong>${metrics.visitEventCount7d || 0}</strong><p>Visit pulses (7d)</p></article>
     </section>
   `;
 }
@@ -431,6 +461,7 @@ function renderLogPane() {
         SITE.nostr.kinds.userMod,
         SITE.nostr.kinds.entity,
         SITE.nostr.kinds.draft,
+        SITE.nostr.kinds.commentMod,
         SITE.nostr.kinds.submissionStatus,
         SITE.nostr.kinds.adminKeyShare
       ].includes(Number(event.kind))
@@ -454,6 +485,7 @@ function renderLogPane() {
 function renderSubmissionCard(item) {
   const latest = item.latest?.payload || {};
   const status = workspaceState.publicState?.submissionStatuses.get(item.id)?.status || "received";
+  const entityRefs = Array.isArray(latest.entity_refs) ? latest.entity_refs : [];
   return `
     <article class="roster-item">
       <div class="workspace-list__row">
@@ -466,6 +498,16 @@ function renderSubmissionCard(item) {
         </div>
       </div>
       <span>${escapeHtml(trimmed(latest.details || "", 180))}</span>
+      ${
+        entityRefs.length
+          ? `<span class="muted-text">Entities: ${escapeHtml(entityRefs.map(resolveEntityDisplayValue).join(", "))}</span>`
+          : ""
+      }
+      ${
+        latest.suggested_entity?.name
+          ? `<span class="muted-text">Suggested entity: ${escapeHtml(latest.suggested_entity.name)}${latest.suggested_entity.location ? ` • ${escapeHtml(latest.suggested_entity.location)}` : ""}</span>`
+          : ""
+      }
       <span class="mono">${item.author}</span>
       <div class="button-row button-row--tight">
         <button class="button-ghost" type="button" data-submission-action="status" data-submission-id="${item.id}" data-author-pubkey="${item.author}" data-status="approved">Approve</button>
@@ -524,7 +566,6 @@ function renderEntitiesPane() {
 }
 
 function renderDraftsPane() {
-  const entities = workspaceState.publicState?.approvedEntities || [];
   return `
     <div class="workspace-grid">
       <section class="surface-panel">
@@ -556,13 +597,18 @@ function renderDraftsPane() {
             </label>
             <label>
               <span>Primary entity</span>
-              <input name="primaryEntity" type="text" list="entityOptions" placeholder="Search existing entities">
+              <input name="primaryEntity" type="text" data-entity-picker-input="primaryEntity" placeholder="Search existing entities">
             </label>
+          </div>
+          <div class="picker-results" data-entity-picker-results="primaryEntity"></div>
+          <div class="button-row button-row--tight">
+            <button class="button-ghost" type="button" data-open-entity-modal data-entity-seed-from="primaryEntity">Create entity</button>
           </div>
           <label>
             <span>Related entities</span>
-            <input name="entityRefs" type="text" placeholder="Comma-separated slugs or names">
+            <input name="entityRefs" type="text" data-entity-picker-input="entityRefs" placeholder="Comma-separated slugs or names">
           </label>
+          <div class="picker-results" data-entity-picker-results="entityRefs"></div>
           <label>
             <span>Markdown body</span>
             <textarea name="markdown" placeholder="# Title&#10;&#10;Lorem ipsum..." required></textarea>
@@ -571,9 +617,6 @@ function renderDraftsPane() {
             <button class="button" type="submit">Publish draft</button>
             <button class="button-ghost" type="button" data-open-entity-modal>Add entity</button>
           </div>
-          <datalist id="entityOptions">
-            ${entities.map((entity) => `<option value="${escapeAttribute(entity.name)}">${escapeHtml(entity.slug)}</option>`).join("")}
-          </datalist>
         </form>
         <label class="draft-export">
           <span>Markdown export</span>
@@ -606,15 +649,40 @@ function renderDraftsPane() {
 }
 
 function renderCommentsPane() {
-  const comments = workspaceState.publicState?.commentsByAuthor.get(workspaceState.viewer?.pubkey || "") || [];
+  const ownComments = workspaceState.publicState?.commentsByAuthor.get(workspaceState.viewer?.pubkey || "") || [];
+  if (currentUserIsAdmin()) {
+    const allComments = (workspaceState.publicState?.allComments || []).slice().reverse();
+    const hiddenCount = workspaceState.publicState?.hiddenComments?.length || 0;
+    return `
+      <section class="surface-panel">
+        <div class="workspace-list__row">
+          <div>
+            <div class="eyebrow">Comments</div>
+            <h2>Moderation queue</h2>
+          </div>
+          <div class="tag-row">
+            <span class="tag">${allComments.length - hiddenCount} visible</span>
+            <span class="tag">${hiddenCount} hidden</span>
+          </div>
+        </div>
+        <div class="roster-list">
+          ${
+            allComments.length
+              ? allComments.map((comment) => renderModerationComment(comment)).join("")
+              : `<div class="empty-state">No comments yet.</div>`
+          }
+        </div>
+      </section>
+    `;
+  }
   return `
     <section class="surface-panel">
       <div class="eyebrow">Comments</div>
       <h2>Your comment history</h2>
       <div class="roster-list">
         ${
-          comments.length
-            ? comments
+          ownComments.length
+            ? ownComments
                 .slice()
                 .reverse()
                 .map(
@@ -633,8 +701,44 @@ function renderCommentsPane() {
   `;
 }
 
+function renderModerationComment(comment) {
+  const author = (workspaceState.publicState?.users || []).find((user) => user.pubkey === comment.author);
+  const authorLabel = author?.displayName || author?.username || shortKey(comment.author);
+  const moderation = comment.moderation || null;
+  const action = comment.visibility === "hidden" ? "restore" : "hide";
+  const actionLabel = action === "restore" ? "Restore" : "Hide";
+  return `
+    <article class="roster-item">
+      <div class="workspace-list__row">
+        <div>
+          <strong>${escapeHtml(authorLabel)}</strong>
+          <span>${escapeHtml(comment.post_slug)} • ${escapeHtml(new Date(comment.created_at * 1000).toLocaleString())}</span>
+        </div>
+        <div class="tag-row">
+          <span class="tag">${escapeHtml(comment.visibility)}</span>
+        </div>
+      </div>
+      <span>${escapeHtml(trimmed(comment.markdown, 260))}</span>
+      ${
+        moderation?.note
+          ? `<span class="muted-text">Moderation note: ${escapeHtml(moderation.note)}</span>`
+          : ""
+      }
+      <label class="comment-note-field">
+        <span>Moderation note</span>
+        <textarea data-comment-note="${escapeAttribute(comment.id)}" placeholder="Optional note for hide or restore">${escapeHtml(moderation?.note || "")}</textarea>
+      </label>
+      <div class="button-row button-row--tight">
+        <a class="text-link" href="./post.html?slug=${encodeURIComponent(comment.post_slug)}">Open post</a>
+        <button class="button-ghost" type="button" data-comment-action="${action}" data-comment-id="${escapeAttribute(comment.id)}">${actionLabel}</button>
+      </div>
+    </article>
+  `;
+}
+
 function renderEntityModal() {
   if (!workspaceState.entityModal) return "";
+  const draft = workspaceState.entityModal || {};
   return `
     <div class="modal-backdrop">
       <section class="modal-card">
@@ -648,31 +752,32 @@ function renderEntityModal() {
         <form class="tip-form" data-entity-form>
           <label>
             <span>Name</span>
-            <input name="name" type="text" maxlength="140" required>
+            <input name="name" type="text" maxlength="140" value="${escapeAttribute(draft.seedName || "")}" required>
           </label>
           <div class="tip-form__split">
             <label>
               <span>Location</span>
-              <input name="location" type="text" maxlength="160" placeholder="City, state" required>
+              <input name="location" type="text" maxlength="160" placeholder="City, state" value="${escapeAttribute(draft.seedLocation || "")}" data-location-input required>
             </label>
             <label>
               <span>Type</span>
-              <input name="type" type="text" maxlength="80" placeholder="factory farm, store, headquarters">
+              <input name="type" type="text" maxlength="80" placeholder="factory farm, store, headquarters" value="${escapeAttribute(draft.seedType || "")}">
             </label>
           </div>
+          <div class="picker-results" data-location-results></div>
           <div class="tip-form__split">
             <label>
               <span>Latitude</span>
-              <input name="lat" type="number" step="0.0001">
+              <input name="lat" type="number" step="0.0001" value="${escapeAttribute(draft.seedLat ?? "")}">
             </label>
             <label>
               <span>Longitude</span>
-              <input name="lng" type="number" step="0.0001">
+              <input name="lng" type="number" step="0.0001" value="${escapeAttribute(draft.seedLng ?? "")}">
             </label>
           </div>
           <label>
             <span>Notes</span>
-            <textarea name="notes" placeholder="Short note for the map and index"></textarea>
+            <textarea name="notes" placeholder="Short note for the map and index">${escapeHtml(draft.seedNotes || "")}</textarea>
           </label>
           <div class="button-row">
             <button class="button" type="submit">Publish entity</button>
@@ -915,6 +1020,26 @@ async function handleEntityAction(button) {
   await refreshWorkspace(true);
 }
 
+async function handleCommentAction(button) {
+  if (!currentUserIsAdmin()) return;
+  const action = button.getAttribute("data-comment-action") || "";
+  const commentId = button.getAttribute("data-comment-id") || "";
+  if (!commentId || !action) return;
+  const noteField = document.querySelector(`[data-comment-note="${commentId}"]`);
+  const note = noteField instanceof HTMLTextAreaElement ? noteField.value.trim() : "";
+  await publishTaggedJson({
+    kind: SITE.nostr.kinds.commentMod,
+    secretKeyHex: workspaceState.session.secretKeyHex,
+    tags: [["e", commentId], ["op", action]],
+    content: {
+      target_id: commentId,
+      action,
+      note
+    }
+  });
+  await refreshWorkspace(true);
+}
+
 async function handleDraftSave(form) {
   if (!currentUserIsAdmin()) return;
   const formData = new FormData(form);
@@ -1018,8 +1143,133 @@ function loadDraft(slug) {
   form.elements.namedItem("status").value = draft.status;
   form.elements.namedItem("summary").value = draft.summary;
   form.elements.namedItem("tags").value = (draft.tags || []).join(", ");
+  form.elements.namedItem("primaryEntity").value = resolveEntityDisplayValue((draft.entity_refs || [])[0]);
   form.elements.namedItem("entityRefs").value = (draft.entity_refs || []).join(", ");
   form.elements.namedItem("markdown").value = draft.markdown;
+  hydrateWorkspaceEnhancements();
+}
+
+function hydrateWorkspaceEnhancements() {
+  renderEntityPickerResults("primaryEntity");
+  renderEntityPickerResults("entityRefs");
+  renderLocationResults();
+}
+
+function createEntityModalState(trigger) {
+  const fieldName = trigger?.getAttribute?.("data-entity-seed-from") || "";
+  const sourceField = fieldName ? document.querySelector(`[name="${fieldName}"]`) : null;
+  const sourceValue = sourceField instanceof HTMLInputElement ? sourceField.value.trim() : "";
+  const locationField = document.querySelector('[name="location"]');
+  const locationValue = locationField instanceof HTMLInputElement ? locationField.value.trim() : "";
+  const seedName = fieldName === "entityRefs" ? lastCommaValue(sourceValue) : sourceValue;
+  return {
+    mode: "create",
+    seedName,
+    seedLocation: locationValue
+  };
+}
+
+function renderEntityPickerResults(fieldName) {
+  const host = document.querySelector(`[data-entity-picker-results="${fieldName}"]`);
+  const input = document.querySelector(`[name="${fieldName}"]`);
+  if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+  const query = fieldName === "entityRefs" ? lastCommaValue(input.value) : input.value.trim();
+  const matches = matchEntities(query).slice(0, 6);
+  if (!query) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = matches.length
+    ? matches
+        .map(
+          (entity) => `
+            <button class="picker-chip" type="button" data-entity-pick="${escapeAttribute(entity.slug)}" data-target-field="${fieldName}">
+              <strong>${escapeHtml(entity.name)}</strong>
+              <span>${escapeHtml(entity.location)}</span>
+            </button>
+          `
+        )
+        .join("")
+    : `<div class="picker-hint">No match yet. Use the create button to add a new entity.</div>`;
+}
+
+function renderLocationResults() {
+  const host = document.querySelector("[data-location-results]");
+  const input = document.querySelector("[data-location-input]");
+  if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+  const query = input.value.trim().toLowerCase();
+  const matches = uniqueLocations()
+    .filter((location) => !query || location.toLowerCase().includes(query))
+    .slice(0, 6);
+  if (!query && !matches.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = matches.length
+    ? matches
+        .map(
+          (location) => `
+            <button class="picker-chip" type="button" data-location-pick="${escapeAttribute(location)}">
+              <strong>${escapeHtml(location)}</strong>
+            </button>
+          `
+        )
+        .join("")
+    : `<div class="picker-hint">No saved location matches. Keep the typed value to create a new one.</div>`;
+}
+
+function applyEntityPick(button) {
+  const slug = button.getAttribute("data-entity-pick") || "";
+  const fieldName = button.getAttribute("data-target-field") || "";
+  const entity = (workspaceState.publicState?.approvedEntities || []).find((item) => item.slug === slug);
+  const input = document.querySelector(`[name="${fieldName}"]`);
+  if (!entity || !(input instanceof HTMLInputElement)) return;
+  if (fieldName === "entityRefs") {
+    const existing = splitTags(input.value)
+      .map((value) => resolveEntityByNameOrSlug(value)?.slug || cleanSlug(value))
+      .filter(Boolean);
+    input.value = dedupe([...existing, entity.slug]).join(", ");
+  } else {
+    input.value = entity.name;
+  }
+  hydrateWorkspaceEnhancements();
+}
+
+function applyLocationPick(button) {
+  const value = button.getAttribute("data-location-pick") || "";
+  const input = document.querySelector("[data-location-input]");
+  if (!(input instanceof HTMLInputElement)) return;
+  input.value = value;
+  hydrateWorkspaceEnhancements();
+}
+
+function matchEntities(query) {
+  const clean = String(query || "").trim().toLowerCase();
+  if (!clean) return [];
+  return (workspaceState.publicState?.approvedEntities || []).filter((entity) => {
+    const haystacks = [
+      entity.name,
+      entity.slug,
+      entity.location,
+      ...(Array.isArray(entity.aliases) ? entity.aliases : [])
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .filter(Boolean);
+    return haystacks.some((value) => value.includes(clean));
+  });
+}
+
+function uniqueLocations() {
+  return dedupe((workspaceState.publicState?.entities || []).map((entity) => entity.location));
+}
+
+function resolveEntityDisplayValue(value) {
+  const entity = resolveEntityByNameOrSlug(value);
+  return entity?.name || String(value || "");
+}
+
+function lastCommaValue(value) {
+  return String(value || "").split(",").pop().trim();
 }
 
 function chooseInitialTab(current) {
@@ -1091,6 +1341,8 @@ function logLabel(event) {
       return "Entity update";
     case SITE.nostr.kinds.draft:
       return "Draft update";
+    case SITE.nostr.kinds.commentMod:
+      return "Comment moderation";
     case SITE.nostr.kinds.submissionStatus:
       return "Submission status";
     case SITE.nostr.kinds.adminKeyShare:
@@ -1112,6 +1364,8 @@ function logTarget(event) {
       return { href: "./admin.html?tab=entities", description: slug || shortKey(event.pubkey) };
     case SITE.nostr.kinds.draft:
       return { href: "./admin.html?tab=drafts", description: slug || shortKey(event.pubkey) };
+    case SITE.nostr.kinds.commentMod:
+      return { href: "./admin.html?tab=comments", description: firstTag(event, "e") || shortKey(event.pubkey) };
     case SITE.nostr.kinds.submissionStatus:
       return { href: "./admin.html?tab=submissions", description: slug || shortKey(event.pubkey) };
     default:
