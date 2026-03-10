@@ -397,7 +397,7 @@ h3 {
 .hero__panel,
 .surface-panel,
 .card-grid article,
-.investigation-card,
+.post-card,
 .info-card,
 .metric-card,
 .article-card,
@@ -550,12 +550,12 @@ h3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.investigation-card,
+.post-card,
 .article-card {
   padding: 1.5rem;
 }
 
-.investigation-card h3 a,
+.post-card h3 a,
 .article-card h3 a {
   text-decoration: none;
 }

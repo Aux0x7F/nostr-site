@@ -44,8 +44,8 @@ const state = {
 document.addEventListener("DOMContentLoaded", () => {
   initExternalLinks();
   initNavigation();
-  initInvestigationCards();
-  void initInvestigationDetail();
+  initBlogCards();
+  void initPostDetail();
   void initMarkdownArticles();
   void initMapPage();
 });
@@ -221,9 +221,9 @@ function initExternalLinks() {
   }
 }
 
-async function initInvestigationCards() {
-  const homeGrid = document.querySelector("[data-home-investigations]");
-  const listGrid = document.querySelector("[data-investigation-list]");
+async function initBlogCards() {
+  const homeGrid = document.querySelector("[data-home-posts]");
+  const listGrid = document.querySelector("[data-blog-list]");
   if (!homeGrid && !listGrid) return;
 
   try {
@@ -233,19 +233,19 @@ async function initInvestigationCards() {
       homeGrid.innerHTML = posts
         .filter((post) => post.featured)
         .slice(0, count)
-        .map((post) => renderInvestigationCard(post, true))
+        .map((post) => renderPostCard(post, true))
         .join("");
     }
     if (listGrid) {
-      listGrid.innerHTML = posts.map((post) => renderInvestigationCard(post, false)).join("");
+      listGrid.innerHTML = posts.map((post) => renderPostCard(post, false)).join("");
     }
   } catch {
     renderError(homeGrid || listGrid, "Blog feed unavailable.");
   }
 }
 
-async function initInvestigationDetail() {
-  const article = document.querySelector("[data-investigation-article]");
+async function initPostDetail() {
+  const article = document.querySelector("[data-post-article]");
   if (!article) return;
 
   try {
@@ -255,21 +255,21 @@ async function initInvestigationDetail() {
     if (!post) throw new Error("No posts found.");
 
     renderMarkdown(article, post.body);
-    setText("[data-investigation-title]", post.title);
-    setText("[data-investigation-summary]", post.summary);
-    setText("[data-investigation-date]", formatDate(post.date));
-    setText("[data-investigation-region]", post.location);
-    setText("[data-investigation-status]", post.status);
-    const tags = document.querySelector("[data-investigation-kicker]");
+    setText("[data-post-title]", post.title);
+    setText("[data-post-summary]", post.summary);
+    setText("[data-post-date]", formatDate(post.date));
+    setText("[data-post-location]", post.location);
+    setText("[data-post-status]", post.status);
+    const tags = document.querySelector("[data-post-tags]");
     if (tags) tags.innerHTML = renderTagList(post.tags);
-    const records = document.querySelector("[data-investigation-records]");
+    const records = document.querySelector("[data-post-records]");
     if (records) records.innerHTML = renderRecordList(post.records);
-    const related = document.querySelector("[data-investigation-related]");
+    const related = document.querySelector("[data-post-related]");
     if (related) {
       related.innerHTML = posts
         .filter((item) => item.slug !== post.slug)
         .slice(0, 2)
-        .map((item) => renderInvestigationCard(item, true))
+        .map((item) => renderPostCard(item, true))
         .join("");
     }
 
@@ -434,9 +434,9 @@ function renderComment(comment, publicState, isAdmin) {
   `;
 }
 
-function renderInvestigationCard(post, compact) {
+function renderPostCard(post, compact) {
   return `
-    <article class="investigation-card ${compact ? "investigation-card--compact" : ""}">
+    <article class="post-card ${compact ? "post-card--compact" : ""}">
       <div class="eyebrow">Blog post</div>
       <h3><a href="./post.html?slug=${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h3>
       <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
@@ -570,7 +570,7 @@ function renderEntityCard(entity, posts) {
                     `<a href="./post.html?slug=${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a>`
                 )
                 .join("")
-            : `<span class="muted-text">No blog post mentions this entry yet.</span>`
+            : `<span class="muted-text">No published posts mention this entry yet.</span>`
         }
       </div>
     </article>

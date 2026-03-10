@@ -1,6 +1,6 @@
 # Guide placeholder
 
-Use this page for process notes, campaign instructions, onboarding steps, or a public how-to. The important part is not the sample copy here. The important part is that the page is plain markdown and can be updated without touching a heavier CMS.
+Use this page for process notes, onboarding steps, operating instructions, or a public how-to. The important part is not the sample copy here. The important part is that the page is plain markdown and can be updated without touching a heavier CMS.
 
 ## Start with the simple version
 

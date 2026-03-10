@@ -1,6 +1,6 @@
 # Nostr Site
 
-Portable static-first site template for campaign, publishing, and research projects that want:
+Portable static-first site template for blogs, archives, documentation hubs, and small publishing teams that want:
 
 - markdown-backed public pages
 - relay-backed collaborative state
@@ -42,6 +42,8 @@ In this template, the baked public layer is:
 - blog markdown in `content/blog/`
 - baked entity data in `content/data/entities.json`
 
+The repo ships with placeholder baked entities in `content/data/entities.json` so the map and inline entity enrichment work before any live relay data exists.
+
 Live relay state can enrich or override that material at runtime. If relays are unavailable, the committed seed data still gives the public site something durable to render.
 
 ## Bakedowns and pull requests
@@ -53,6 +55,8 @@ Current expectation:
 - live drafts and entities can appear dynamically first
 - approved cleartext items are then baked down into `content/blog/` and `content/data/entities.json`
 - a human with GitHub access reviews and merges the resulting PR or committed snapshot
+
+If you adopt this template for another site, treat the live relay layer as the working state and the committed markdown/JSON as the reviewed snapshot.
 
 ## Security caveats
 

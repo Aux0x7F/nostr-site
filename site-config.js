@@ -1,7 +1,7 @@
 export const SITE = Object.freeze({
   projectName: "Nostr Site",
   shortName: "Nostr Site",
-  tagline: "A portable static-first site template for blogs, campaigns, and collaborative publishing.",
+  tagline: "A portable static-first site template for blogs, archives, and collaborative publishing.",
   donateUrl: "https://example.org/support",
   merchUrl: "https://example.org/store",
   youtubeUrl: "https://youtube.com/@exampleproject",
