@@ -9,6 +9,7 @@ import {
   cleanSlug,
   deriveIdentity,
   ensureEventToolsLoaded,
+  ensureBlobAvailable,
   loadPublicState,
   publishTaggedJson
 } from "../nostr.js";
@@ -115,6 +116,29 @@ function initNavigation() {
     }
   });
 
+  document.addEventListener("error", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLImageElement) || !target.matches("[data-avatar-sha]")) return;
+    if (!state.session?.secretKeyHex || target.dataset.refreshing === "yes") return;
+    const reference = {
+      sha256: target.dataset.avatarSha || "",
+      url: target.dataset.avatarUrl || target.currentSrc || target.src,
+      access: "public",
+      cipher: "none",
+      type: target.dataset.avatarType || "image/jpeg",
+      name: target.dataset.avatarName || "avatar"
+    };
+    target.dataset.refreshing = "yes";
+    void ensureBlobAvailable(state.session.secretKeyHex, reference)
+      .then(() => {
+        const src = reference.url;
+        target.src = `${src}${src.includes("?") ? "&" : "?"}refresh=${Date.now()}`;
+      })
+      .catch(() => {
+        target.dataset.refreshing = "no";
+      });
+  }, true);
+
   void bootstrapRelayState();
 }
 
@@ -191,7 +215,11 @@ function renderNavigation() {
 function profileBadgeMarkup(user) {
   if (user?.avatarUrl) {
     const label = user.displayName || user.username || "Profile";
-    return `<img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}">`;
+    const blob = user.avatarBlob;
+    const blobAttrs = blob?.sha256
+      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || user.avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
+      : "";
+    return `<img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}>`;
   }
   if (!state.session?.username) return "Log in";
   return escapeHtml(profileInitials(user?.displayName || state.session.username));

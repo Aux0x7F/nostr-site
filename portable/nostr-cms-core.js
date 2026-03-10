@@ -159,7 +159,7 @@ async function publishSubmission(secretKeyHex, payload) {
   return publishEncryptedJson({
     secretKeyHex,
     targetPubkey: config.nostr.inboxPubkey,
-    tags: [["d", submissionId], ["k", "submission"]],
+    tags: [["d", submissionId], ["k", "submission"], ...buildBlobTags(body.attachment)],
     content: body
   });
 }
@@ -376,7 +376,9 @@ async function fetchPublicState() {
           config.nostr.kinds.comment,
           config.nostr.kinds.commentMod,
           config.nostr.kinds.submissionStatus,
-          config.nostr.kinds.adminKeyShare
+          config.nostr.kinds.adminKeyShare,
+          config.nostr.kinds.blobRequest,
+          config.nostr.kinds.blobFulfillment
         ],
         "#t": [config.nostr.appTag],
         limit: config.nostr.publicLoadLimit
@@ -409,6 +411,8 @@ function buildPublicState(events, seedEntities = []) {
   const entities = new Map();
   const drafts = new Map();
   const comments = new Map();
+  const blobRequests = new Map();
+  const blobFulfillments = new Map();
   const submissionCounters = new Map();
   const seenPubkeys = new Set();
 
@@ -497,6 +501,7 @@ function buildPublicState(events, seedEntities = []) {
         username: normalizeUsername(payload?.username || ""),
         display_name: String(payload?.display_name || payload?.displayName || "").trim(),
         avatar_url: String(payload?.avatar_url || payload?.avatarUrl || "").trim(),
+        avatar_blob: normalizeBlobReference(payload?.avatar_blob || payload?.avatarBlob || null),
         bio: String(payload?.bio || "").trim(),
         social_links: Array.isArray(payload?.social_links)
           ? payload.social_links.map((item) => String(item || "").trim()).filter(Boolean)
@@ -573,6 +578,18 @@ function buildPublicState(events, seedEntities = []) {
         _event: event
       };
       mergeLatest(comments, commentId, next);
+      continue;
+    }
+
+    if (kind === config.nostr.kinds.blobRequest) {
+      const next = buildBlobEventState(event, "request");
+      if (next) mergeLatest(blobRequests, blobReferenceKey(next), next);
+      continue;
+    }
+
+    if (kind === config.nostr.kinds.blobFulfillment) {
+      const next = buildBlobEventState(event, "fulfillment");
+      if (next) mergeLatest(blobFulfillments, blobReferenceKey(next), next);
       continue;
     }
 
@@ -665,6 +682,7 @@ function buildPublicState(events, seedEntities = []) {
         username,
         displayName,
         avatarUrl: profile?.avatar_url || "",
+        avatarBlob: profile?.avatar_blob || null,
         bio: profile?.bio || "",
         socialLinks: Array.isArray(profile?.social_links) ? profile.social_links : [],
         isAdmin: admins.has(pubkey),
@@ -691,6 +709,8 @@ function buildPublicState(events, seedEntities = []) {
     comments: visibleComments,
     commentsByPost,
     commentsByAuthor,
+    blobRequests,
+    blobFulfillments,
     submissionStatuses,
     submissionCountByAuthor,
     metrics: {
@@ -819,6 +839,8 @@ function emptyPublicState(error, seedEntities = []) {
     comments: [],
     commentsByPost: new Map(),
     commentsByAuthor: new Map(),
+    blobRequests: new Map(),
+    blobFulfillments: new Map(),
     submissionStatuses: new Map(),
     submissionCountByAuthor: new Map(),
     metrics: {
@@ -922,6 +944,86 @@ function groupBy(items, key) {
     map.set(bucketKey, bucket);
   }
   return map;
+}
+
+function buildBlobTags(reference) {
+  const normalized = normalizeBlobReference(reference);
+  if (!normalized) return [];
+  const tags = [
+    ["x", normalized.sha256],
+    ["r", normalized.url],
+    [
+      "blob",
+      normalized.sha256,
+      normalized.url,
+      normalized.access || "public",
+      normalized.cipher || "none",
+      normalized.type || "application/octet-stream",
+      normalized.name || "blob.bin",
+      normalized.recipient_pubkey || "",
+      normalized.author_pubkey || ""
+    ]
+  ];
+  return tags;
+}
+
+function buildBlobEventState(event, mode) {
+  const payload = parseObject(event.content);
+  const reference = normalizeBlobReference(payload?.blob || payload?.reference || payload || null, event);
+  if (!reference) return null;
+  return {
+    ...reference,
+    mode,
+    pubkey: normalizePubkey(event.pubkey),
+    created_at: toUnix(event.created_at),
+    id: event.id,
+    note: String(payload?.note || payload?.reason || "").trim(),
+    request_id: String(payload?.request_id || firstTag(event, "req") || "").trim(),
+    _event: event
+  };
+}
+
+function normalizeBlobReference(value, event = null) {
+  const input = value && typeof value === "object" ? value : {};
+  const fallback = event && typeof event === "object" ? extractBlobReferenceFromTags(event.tags || []) : null;
+  const sha256 = String(input.sha256 || fallback?.sha256 || firstTag(event || {}, "x") || "").trim().toLowerCase();
+  const url = String(input.url || fallback?.url || firstTag(event || {}, "r") || "").trim();
+  if (!isHex64(sha256) || !/^https?:\/\//i.test(url)) return null;
+  return {
+    sha256,
+    url,
+    access: String(input.access || fallback?.access || "public").trim() || "public",
+    cipher: String(input.cipher || fallback?.cipher || "none").trim() || "none",
+    type: String(input.type || fallback?.type || "application/octet-stream").trim() || "application/octet-stream",
+    name: String(input.name || fallback?.name || "blob.bin").trim() || "blob.bin",
+    size: Number(input.size || fallback?.size || 0) || 0,
+    author_pubkey: normalizePubkey(input.author_pubkey || fallback?.author_pubkey || ""),
+    recipient_pubkey: normalizePubkey(input.recipient_pubkey || fallback?.recipient_pubkey || ""),
+    uploaded_at: String(input.uploaded_at || fallback?.uploaded_at || "").trim()
+  };
+}
+
+function extractBlobReferenceFromTags(tags) {
+  if (!Array.isArray(tags)) return null;
+  for (const tag of tags) {
+    if (!Array.isArray(tag) || tag[0] !== "blob") continue;
+    return {
+      sha256: String(tag[1] || "").trim().toLowerCase(),
+      url: String(tag[2] || "").trim(),
+      access: String(tag[3] || "").trim(),
+      cipher: String(tag[4] || "").trim(),
+      type: String(tag[5] || "").trim(),
+      name: String(tag[6] || "").trim(),
+      recipient_pubkey: normalizePubkey(tag[7] || ""),
+      author_pubkey: normalizePubkey(tag[8] || "")
+    };
+  }
+  return null;
+}
+
+function blobReferenceKey(reference) {
+  if (!reference || typeof reference !== "object") return "";
+  return String(reference.sha256 || reference.url || "").trim().toLowerCase();
 }
 
 function parseObject(value) {

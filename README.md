@@ -4,6 +4,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 
 - markdown-backed public pages
 - relay-backed collaborative state
+- optional cache-backed blobs for avatars and encrypted attachments
 - deterministic username/password accounts
 - encrypted submission intake
 - a route from live relay state to committed cleartext content
@@ -23,6 +24,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - placeholder public pages
 - generic placeholder content
 - reusable Nostr/CMS helpers in `portable/`
+- reusable blob upload + cache refresh helpers in `portable/`
 - reusable minified browser library in `support-lib/`
 - bundled peer pinner package in `peer-pinner/`
 - build output to `dist/`
@@ -65,9 +67,24 @@ If you adopt this template for another site, treat the live relay layer as the w
 
 ## Storage caveats
 
-- Blob storage is not built into this repo yet.
-- Profile pictures currently use `avatar_url` fields, not uploaded blobs.
-- Submission/file binary handling still needs a real blob strategy if you want more than small text payloads and metadata.
+- Clients upload blobs to the configured cache host in `site-config.js`.
+- Clear avatars upload as public blobs.
+- Submission attachments upload as ciphertext, encrypted client-side to the site inbox key.
+- Blob refs are published in relay-visible metadata so peer pinners can retain them without decrypting private submissions.
+- On cache miss, signed `blobRequest` events ask a peer pinner to republish the retained blob to the cache host and emit a `blobFulfillment` event.
+- There is no server-side per-user blob ACL layer in this minimal build. Private attachment safety comes from client-side encryption, not storage secrecy.
+
+## Cache refresh model
+
+The blob path is intentionally split:
+
+1. clients upload to a writable cache host such as a Blossom server
+2. signed Nostr events carry the blob refs
+3. peer pinners retain blobs locally by following those refs
+4. cache misses trigger signed blob requests on the relay layer
+5. a peer pinner re-uploads the retained blob to the cache host and publishes a fulfillment event
+
+That keeps the pinner in a peer-retention role instead of making it the first-hop blob origin.
 
 ## Build
 

@@ -9,6 +9,7 @@
     "start": "node dist/peer-pinner.js"
   },
   "dependencies": {
+    "nostr-tools": "^2.23.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

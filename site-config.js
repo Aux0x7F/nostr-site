@@ -9,6 +9,12 @@ export const SITE = Object.freeze({
   content: {
     seedEntitiesPath: "./content/data/entities.json"
   },
+  blobs: {
+    baseUrl: "https://blossom.band",
+    maxUploadBytes: 2000000,
+    requestTimeoutMs: 8000,
+    requestPollMs: 900
+  },
   map: {
     defaultCenter: [39.5, -98.35],
     defaultZoom: 4,
@@ -44,7 +50,9 @@ export const SITE = Object.freeze({
       comment: 34135,
       commentMod: 34136,
       submissionStatus: 34137,
-      adminKeyShare: 34138
+      adminKeyShare: 34138,
+      blobRequest: 34139,
+      blobFulfillment: 34140
     }
   }
 });

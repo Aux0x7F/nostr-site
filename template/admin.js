@@ -2,6 +2,7 @@ import SITE from "../site-config.js";
 import { buildDraftMarkdown, createUniqueSlug, splitTags } from "../content-utils.js";
 import {
   cleanSlug,
+  decryptUploadedBlob,
   deriveIdentity,
   ensureEventToolsLoaded,
   loadAdminKeyShare,
@@ -11,7 +12,8 @@ import {
   publishAdminKeyShare,
   publishSubmissionChat,
   publishTaggedJson,
-  shortKey
+  shortKey,
+  uploadPublicBlob
 } from "../nostr.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../session.js";
 
@@ -81,6 +83,12 @@ function bindWorkspace() {
     const submissionAction = target.closest("[data-submission-action]");
     if (submissionAction) {
       await handleSubmissionAction(submissionAction);
+      return;
+    }
+
+    const attachmentAction = target.closest("[data-download-attachment]");
+    if (attachmentAction) {
+      await handleAttachmentDownload(attachmentAction);
       return;
     }
 
@@ -262,6 +270,10 @@ function renderProfilePane() {
             <input name="avatarUrl" type="url" placeholder="https://example.org/avatar.jpg" value="${escapeAttribute(current?.avatarUrl || "")}">
           </label>
           <label>
+            <span>Avatar upload</span>
+            <input name="avatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif">
+          </label>
+          <label>
             <span>Social links</span>
             <textarea name="socialLinks" placeholder="One URL per line">${escapeHtml((current?.socialLinks || []).join("\n"))}</textarea>
           </label>
@@ -269,7 +281,7 @@ function renderProfilePane() {
             <button class="button" type="submit">Save profile</button>
           </div>
           <div class="status-box" data-workspace-status>Your username claim is rebroadcast when you save.</div>
-          <p class="muted-text">Blob uploads are not built into this stack yet. Use a stable image URL for profile pictures for now.</p>
+          <p class="muted-text">Upload a clear avatar to the cache layer, or keep using a stable image URL.</p>
         </form>
         ${
           currentUserIsAdmin()
@@ -458,6 +470,7 @@ function renderSubmissionCard(item) {
       <div class="button-row button-row--tight">
         <button class="button-ghost" type="button" data-submission-action="status" data-submission-id="${item.id}" data-author-pubkey="${item.author}" data-status="approved">Approve</button>
         <button class="button-ghost" type="button" data-submission-action="status" data-submission-id="${item.id}" data-author-pubkey="${item.author}" data-status="rejected">Reject</button>
+        ${latest.attachment?.url ? `<button class="button-ghost" type="button" data-download-attachment="${item.id}">Attachment</button>` : ""}
         <button class="button-ghost" type="button" data-open-chat="${item.id}" data-chat-target="${item.author}">Chat</button>
       </div>
     </article>
@@ -739,9 +752,25 @@ async function handleProfileSave(form) {
   const status = form.querySelector("[data-workspace-status]");
   try {
     const formData = new FormData(form);
+    const current = currentUser();
+    let avatarUrl = String(formData.get("avatarUrl") || "").trim();
+    let avatarBlob = current?.avatarBlob || null;
+    const avatarFile = formData.get("avatarFile");
+    if (avatarFile instanceof File && avatarFile.size > 0) {
+      const upload = await uploadPublicBlob(
+        workspaceState.session.secretKeyHex,
+        avatarFile,
+        { purpose: "avatar" }
+      );
+      avatarUrl = upload.url;
+      avatarBlob = upload;
+    } else if (!avatarUrl || avatarUrl !== String(current?.avatarUrl || "").trim()) {
+      avatarBlob = null;
+    }
     await rebroadcastAccount(workspaceState.session, {
       displayName: formData.get("displayName"),
-      avatarUrl: formData.get("avatarUrl"),
+      avatarUrl,
+      avatarBlob,
       bio: formData.get("bio"),
       socialLinks: String(formData.get("socialLinks") || "")
         .split(/\r?\n/)
@@ -758,6 +787,33 @@ async function handleProfileSave(form) {
       status.textContent = String(error?.message || error || "Profile save failed.");
       status.dataset.state = "error";
     }
+  }
+}
+
+async function handleAttachmentDownload(button) {
+  if (!currentUserHasInboxAccess()) return;
+  const submission = workspaceState.inboxSubmissions.find((item) => item.id === (button.getAttribute("data-download-attachment") || ""));
+  const attachment = submission?.latest?.payload?.attachment;
+  if (!attachment?.url) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Decrypting";
+  try {
+    const file = await decryptUploadedBlob(
+      workspaceState.siteKeyShare.siteSecretKeyHex,
+      attachment.author_pubkey || submission.author,
+      attachment
+    );
+    triggerBrowserDownload(file);
+    button.textContent = "Downloaded";
+  } catch (error) {
+    button.textContent = "Retry";
+    window.alert(String(error?.message || error || "Attachment download failed."));
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.textContent = original;
+    }, 900);
   }
 }
 
@@ -1087,6 +1143,17 @@ function trimmed(value, length) {
 function parseMaybeNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function triggerBrowserDownload(file) {
+  const url = URL.createObjectURL(file.blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = file.name || "download.bin";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function escapeHtml(value) {

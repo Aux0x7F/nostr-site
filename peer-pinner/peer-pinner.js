@@ -3,28 +3,34 @@ const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
 const WebSocket = require("ws");
+const { finalizeEvent, nip98 } = require("nostr-tools");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4858);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const EVENTS_FILE = process.env.EVENTS_FILE || path.join(DATA_DIR, "events.ndjson");
 const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "peer-pinner-identity.json");
+const BLOBS_DIR = process.env.BLOBS_DIR || path.join(DATA_DIR, "blobs");
 const INFO_NAME = process.env.PINNER_NAME || "Nostr Site Peer Pinner";
 const INFO_DESC = process.env.PINNER_DESCRIPTION || "Mirrors + pins tagged relay events for downstream Nostr site consumers";
 const PINNER_PUBKEY_OVERRIDE = process.env.PINNER_PUBKEY || "";
 const PINNER_ALIAS_OVERRIDE = process.env.PINNER_ALIAS || "";
 const MAX_REQ_EVENTS = Number(process.env.MAX_REQ_EVENTS || 5000);
 const TAG_FILTER = String(process.env.APP_TAG || "nostr-site-template").trim();
-const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34127,34128,34129,34130,34131,34133,34134,34135,34136,34137,34138");
+const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34127,34128,34129,34130,34131,34133,34134,34135,34136,34137,34138,34139,34140");
 const UPSTREAM_RELAYS = parseRelays(process.env.UPSTREAM_RELAYS || "wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol");
 const UPSTREAM_BACKFILL_LIMIT = Number(process.env.UPSTREAM_BACKFILL_LIMIT || 7000);
 const UPSTREAM_RECONNECT_MS = Number(process.env.UPSTREAM_RECONNECT_MS || 2500);
+const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_BYTES || 2000000);
+const BLOB_CACHE_BASE_URL = String(process.env.BLOB_CACHE_BASE_URL || "https://blossom.band").trim();
 const KINDS = {
   snapshot: 34126,
   adminClaim: 34127,
   adminRole: 34128,
   nameClaim: 34130,
   snapshotRequest: 34132,
+  blobRequest: 34139,
+  blobFulfillment: 34140,
 };
 
 if (!Number.isFinite(PORT) || PORT <= 0) {
@@ -36,6 +42,7 @@ if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
+fs.mkdirSync(BLOBS_DIR, { recursive: true });
 if (!fs.existsSync(EVENTS_FILE)) fs.writeFileSync(EVENTS_FILE, "", { encoding: "utf8" });
 const pinnerIdentity = loadOrCreatePeerPinnerIdentity(IDENTITY_FILE, PINNER_ALIAS_OVERRIDE);
 const PINNER_ALIAS = PINNER_ALIAS_OVERRIDE || pinnerIdentity.alias;
@@ -47,6 +54,7 @@ let orderedDirty = false;
 let persistWriteOk = 0;
 let persistWriteFail = 0;
 let lastPersistError = "";
+const blobJobs = new Map();
 
 const upstreams = new Map();
 const model = {
@@ -65,8 +73,31 @@ const model = {
 loadEvents();
 
 const server = http.createServer((req, res) => {
+  void handleHttp(req, res);
+});
+
+async function handleHttp(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const accept = String(req.headers.accept || "");
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (url.pathname === "/upload" && req.method === "HEAD") {
+    res.writeHead(204, { "x-max-blob-bytes": String(MAX_BLOB_BYTES) });
+    res.end();
+    return;
+  }
+  if (url.pathname === "/upload" && req.method === "PUT") {
+    await handleBlobUpload(req, res, url);
+    return;
+  }
+  if (/^\/[0-9a-f]{64}$/i.test(url.pathname) && (req.method === "GET" || req.method === "HEAD")) {
+    handleBlobRead(req, res, url.pathname.slice(1));
+    return;
+  }
   if (url.pathname === "/healthz") {
     const upstream = [];
     for (const [relay, client] of upstreams.entries()) {
@@ -90,6 +121,10 @@ const server = http.createServer((req, res) => {
         writes_ok: persistWriteOk,
         writes_failed: persistWriteFail,
         last_write_error: lastPersistError,
+        blobs_dir: BLOBS_DIR,
+        blob_cache_base_url: BLOB_CACHE_BASE_URL,
+        max_blob_bytes: MAX_BLOB_BYTES,
+        blob_count: countStoredBlobs(),
       },
       logical: resolveLogicalState(),
     }));
@@ -107,7 +142,7 @@ const server = http.createServer((req, res) => {
       contact: PINNER_ALIAS,
       software: "nostr-site-peer-pinner",
       version: "0.2.0",
-      supported_nips: [1, 11],
+      supported_nips: [1, 11, 98],
       limitation: {
         max_limit: MAX_REQ_EVENTS,
       },
@@ -116,7 +151,7 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
   res.end("nostr-site peer pinner\n");
-});
+}
 
 const wss = new WebSocket.Server({ noServer: true });
 
@@ -232,6 +267,431 @@ const shutdown = () => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
+async function handleBlobUpload(req, res, url) {
+  try {
+    const body = await readRequestBody(req, MAX_BLOB_BYTES);
+    if (!body.length) {
+      sendJson(res, 400, { error: "Blob body is required." });
+      return;
+    }
+    const authEvent = unpackHttpAuthEvent(req.headers.authorization);
+    await nip98.validateEvent(authEvent, absoluteRequestUrl(req, url), req.method, body);
+
+    const sha256 = hashBuffer(body);
+    const filePath = blobFile(sha256);
+    const metaPath = blobMetaFile(sha256);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, body);
+    }
+
+    const nextMeta = {
+      sha256,
+      size: body.length,
+      type: cleanMimeType(req.headers["content-type"]),
+      uploaded_by: normPk(authEvent.pubkey),
+      uploaded_at: Math.floor(Date.now() / 1000),
+      original_name: cleanFileName(req.headers["x-blob-name"]),
+      purpose: cleanHeader(req.headers["x-blob-purpose"]),
+      visibility: cleanHeader(req.headers["x-blob-visibility"]) || "public"
+    };
+    fs.writeFileSync(metaPath, JSON.stringify({ ...readBlobMeta(sha256), ...nextMeta }, null, 2), "utf8");
+
+    sendJson(res, 200, {
+      sha256,
+      size: body.length,
+      type: nextMeta.type,
+      url: `${url.origin}/${sha256}`
+    });
+  } catch (error) {
+    if (String(error?.message || "").includes("Blob exceeds")) {
+      sendJson(res, 413, { error: String(error.message) });
+      return;
+    }
+    sendJson(res, 401, { error: String(error?.message || error || "Blob upload failed.") });
+  }
+}
+
+function handleBlobRead(req, res, sha256) {
+  const filePath = blobFile(sha256);
+  if (!fs.existsSync(filePath)) {
+    sendJson(res, 404, { error: "Blob not found." });
+    return;
+  }
+  const meta = readBlobMeta(sha256);
+  const stat = fs.statSync(filePath);
+  res.writeHead(200, {
+    "content-type": meta.type || "application/octet-stream",
+    "content-length": String(stat.size),
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff"
+  });
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+  fs.createReadStream(filePath).pipe(res);
+}
+
+function setCorsHeaders(res) {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "GET, HEAD, PUT, OPTIONS");
+  res.setHeader(
+    "access-control-allow-headers",
+    "Authorization, Content-Type, X-Blob-Name, X-Blob-Purpose, X-Blob-Visibility"
+  );
+}
+
+function sendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
+}
+
+function readRequestBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    let finished = false;
+    req.on("data", (chunk) => {
+      if (finished) return;
+      total += chunk.length;
+      if (Number.isFinite(maxBytes) && maxBytes > 0 && total > maxBytes) {
+        finished = true;
+        reject(new Error(`Blob exceeds ${Math.round(maxBytes / 1024)} KB.`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (finished) return;
+      finished = true;
+      resolve(Buffer.concat(chunks));
+    });
+    req.on("error", (error) => {
+      if (finished) return;
+      finished = true;
+      reject(error);
+    });
+  });
+}
+
+function unpackHttpAuthEvent(header) {
+  const token = String(header || "").trim();
+  if (!token) throw new Error("Missing Authorization header.");
+  const raw = token.replace(/^Nostr\s+/i, "");
+  const decoded = Buffer.from(raw, "base64").toString("utf8");
+  const event = JSON.parse(decoded);
+  if (!event || typeof event !== "object") throw new Error("Invalid auth token.");
+  return event;
+}
+
+function absoluteRequestUrl(req, url) {
+  const host = req.headers["x-forwarded-host"] || req.headers.host || url.host;
+  const proto = req.headers["x-forwarded-proto"] || url.protocol.replace(":", "");
+  return `${proto}://${host}${url.pathname}`;
+}
+
+function blobFile(sha256) {
+  return path.join(BLOBS_DIR, sha256);
+}
+
+function blobMetaFile(sha256) {
+  return path.join(BLOBS_DIR, `${sha256}.json`);
+}
+
+function readBlobMeta(sha256) {
+  try {
+    return JSON.parse(fs.readFileSync(blobMetaFile(sha256), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeBlobMeta(sha256, payload) {
+  fs.writeFileSync(blobMetaFile(sha256), JSON.stringify(payload, null, 2), "utf8");
+}
+
+function countStoredBlobs() {
+  try {
+    return fs.readdirSync(BLOBS_DIR).filter((entry) => /^[0-9a-f]{64}$/i.test(entry)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function maybeHandleBlobEvent(ev, { allowFulfillment = true } = {}) {
+  const refs = extractBlobRefsFromEvent(ev);
+  for (const ref of refs) {
+    void retainBlobReference(ref, "relay-ref");
+  }
+  if (allowFulfillment && Number(ev?.kind) === KINDS.blobRequest) {
+    void maybeFulfillBlobRequest(ev);
+  }
+}
+
+function extractBlobRefsFromEvent(ev) {
+  const refs = [];
+  collectBlobRefs(parseObj(ev?.content), refs, 0);
+  for (const tagRef of extractBlobRefsFromTags(ev?.tags || [])) {
+    refs.push(tagRef);
+  }
+  const deduped = new Map();
+  for (const ref of refs) {
+    const normalized = normalizeBlobRef(ref);
+    if (!normalized) continue;
+    deduped.set(normalized.sha256, normalized);
+  }
+  return [...deduped.values()];
+}
+
+function collectBlobRefs(value, refs, depth) {
+  if (!value || depth > 6) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectBlobRefs(item, refs, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+  const direct = normalizeBlobRef(value);
+  if (direct) refs.push(direct);
+  for (const entry of Object.values(value)) {
+    collectBlobRefs(entry, refs, depth + 1);
+  }
+}
+
+function extractBlobRefsFromTags(tags) {
+  const refs = [];
+  for (const tag of tags) {
+    if (!Array.isArray(tag) || tag[0] !== "blob") continue;
+    const ref = normalizeBlobRef({
+      sha256: tag[1],
+      url: tag[2],
+      access: tag[3],
+      cipher: tag[4],
+      type: tag[5],
+      name: tag[6],
+      recipient_pubkey: tag[7],
+      author_pubkey: tag[8],
+    });
+    if (ref) refs.push(ref);
+  }
+  return refs;
+}
+
+function normalizeBlobRef(value) {
+  if (!value || typeof value !== "object") return null;
+  const sha256 = normPk(value.sha256 || "");
+  const url = String(value.url || "").trim();
+  if (!isHex64(sha256) || !/^https?:\/\//i.test(url)) return null;
+  return {
+    sha256,
+    url,
+    access: String(value.access || "public").trim() || "public",
+    cipher: String(value.cipher || "none").trim() || "none",
+    type: cleanMimeType(value.type || "application/octet-stream"),
+    name: cleanFileName(value.name || "blob.bin"),
+    size: Number(value.size || 0) || 0,
+    author_pubkey: normPk(value.author_pubkey || ""),
+    recipient_pubkey: normPk(value.recipient_pubkey || ""),
+    uploaded_at: String(value.uploaded_at || "").trim(),
+  };
+}
+
+async function retainBlobReference(reference, source) {
+  const ref = normalizeBlobRef(reference);
+  if (!ref) return null;
+  const existingJob = blobJobs.get(ref.sha256);
+  if (existingJob) return existingJob;
+  const job = (async () => {
+    try {
+      const filePath = blobFile(ref.sha256);
+      if (fs.existsSync(filePath)) {
+        writeBlobMeta(ref.sha256, {
+          ...readBlobMeta(ref.sha256),
+          ...ref,
+          source_url: ref.url,
+          retained_from: source,
+          retained_at: Math.floor(Date.now() / 1000),
+        });
+        return readBlobMeta(ref.sha256);
+      }
+      const response = await fetch(ref.url, { method: "GET" });
+      if (!response.ok) return null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (hashBuffer(buffer) !== ref.sha256) return null;
+      fs.writeFileSync(filePath, buffer);
+      writeBlobMeta(ref.sha256, {
+        ...readBlobMeta(ref.sha256),
+        ...ref,
+        size: buffer.length,
+        type: cleanMimeType(response.headers.get("content-type") || ref.type),
+        source_url: ref.url,
+        retained_from: source,
+        retained_at: Math.floor(Date.now() / 1000),
+      });
+      return readBlobMeta(ref.sha256);
+    } catch {
+      return null;
+    } finally {
+      blobJobs.delete(ref.sha256);
+    }
+  })();
+  blobJobs.set(ref.sha256, job);
+  return job;
+}
+
+async function maybeFulfillBlobRequest(ev) {
+  const request = parseBlobRequestEvent(ev);
+  if (!request) return false;
+  if (!isBlobRequestAuthorized(ev.pubkey, request)) return false;
+  const filePath = blobFile(request.sha256);
+  if (!fs.existsSync(filePath)) {
+    await retainBlobReference(request, "request-miss");
+  }
+  if (!fs.existsSync(filePath)) return false;
+  const uploaded = await uploadBlobToCache(filePath, { ...readBlobMeta(request.sha256), ...request });
+  if (!uploaded?.url) return false;
+  const event = signAppEvent({
+    kind: KINDS.blobFulfillment,
+    tags: [
+      ["d", request.sha256],
+      ["x", request.sha256],
+      ["r", uploaded.url],
+      ["req", String(ev.id || "")],
+      ["p", normPk(ev.pubkey)],
+      ["blob", request.sha256, uploaded.url, request.access || "public", request.cipher || "none", request.type || "application/octet-stream", request.name || "blob.bin", request.recipient_pubkey || "", request.author_pubkey || ""],
+    ],
+    content: {
+      protocol: `${TAG_FILTER}-blob-fulfillment/v1`,
+      request_event_id: String(ev.id || ""),
+      requested_by: normPk(ev.pubkey),
+      fulfilled_at: new Date().toISOString(),
+      blob: {
+        ...request,
+        url: uploaded.url,
+        size: uploaded.size || request.size || 0,
+        type: uploaded.type || request.type || "application/octet-stream",
+      },
+    },
+  });
+  if (!storeEvent(event)) return false;
+  publishToUpstreams(event, "");
+  broadcastEvent(event);
+  return true;
+}
+
+function parseBlobRequestEvent(ev) {
+  if (!ev || Number(ev.kind) !== KINDS.blobRequest) return null;
+  const payload = parseObj(ev.content) || {};
+  return normalizeBlobRef(payload.blob || payload.reference || payload);
+}
+
+function isBlobRequestAuthorized(requesterPubkey, reference) {
+  const access = String(reference?.access || "public").trim().toLowerCase();
+  if (!access || access === "public") return true;
+  return model.admins.has(normPk(requesterPubkey));
+}
+
+async function uploadBlobToCache(filePath, reference) {
+  const ref = normalizeBlobRef(reference);
+  if (!ref) return null;
+  const baseUrl = ensureTrailingSlash(BLOB_CACHE_BASE_URL);
+  const uploadUrl = new URL("upload", baseUrl).toString();
+  const body = fs.readFileSync(filePath);
+  const token = await nip98.getToken(
+    uploadUrl,
+    "PUT",
+    async (template) => finalizeEvent(template, new Uint8Array(Buffer.from(pinnerIdentity.secret_key_hex, "hex"))),
+    true,
+    body
+  );
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: token,
+      "Content-Type": cleanMimeType(ref.type),
+      "X-Blob-Name": encodeURIComponent(ref.name || `${ref.sha256}.bin`),
+      "X-Blob-Purpose": ref.access === "public" ? "avatar" : "attachment",
+      "X-Blob-Visibility": ref.access || "public",
+    },
+    body,
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const fallbackUrl = new URL(ref.sha256, baseUrl).toString();
+    const probe = await fetch(fallbackUrl, { method: "HEAD" }).catch(() => null);
+    if (!probe?.ok) return null;
+    return {
+      sha256: ref.sha256,
+      url: fallbackUrl,
+      size: Number(probe.headers.get("content-length") || ref.size || 0) || 0,
+      type: cleanMimeType(probe.headers.get("content-type") || ref.type),
+    };
+  }
+  return {
+    sha256: normPk(payload?.sha256 || ref.sha256),
+    url: String(payload?.url || new URL(ref.sha256, baseUrl).toString()).trim(),
+    size: Number(payload?.size || ref.size || 0) || 0,
+    type: cleanMimeType(payload?.type || ref.type),
+  };
+}
+
+function signAppEvent({ kind, tags = [], content = "" }) {
+  return finalizeEvent(
+    {
+      kind: Number(kind),
+      created_at: Math.floor(Date.now() / 1000),
+      tags: withAppTag(tags),
+      content: typeof content === "string" ? content : JSON.stringify(content),
+    },
+    new Uint8Array(Buffer.from(pinnerIdentity.secret_key_hex, "hex"))
+  );
+}
+
+function withAppTag(tags) {
+  const next = Array.isArray(tags) ? tags.filter(Array.isArray).map((tag) => [...tag]) : [];
+  if (!next.some((tag) => tag[0] === "t" && tag.includes(TAG_FILTER))) {
+    next.push(["t", TAG_FILTER]);
+  }
+  if (!next.some((tag) => tag[0] === "client")) {
+    next.push(["client", "nostr-site-peer-pinner"]);
+  }
+  return next;
+}
+
+function ensureTrailingSlash(value) {
+  return String(value || "").endsWith("/") ? String(value) : `${String(value || "")}/`;
+}
+
+function hashBuffer(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function cleanMimeType(value) {
+  const input = String(value || "").split(";")[0].trim();
+  return input || "application/octet-stream";
+}
+
+function cleanFileName(value) {
+  try {
+    const decoded = decodeURIComponent(String(value || ""));
+    return String(decoded)
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .slice(0, 160);
+  } catch {
+    return "";
+  }
+}
+
+function cleanHeader(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").trim().slice(0, 120);
+}
+
 function startUpstreamMirrors() {
   for (const relay of UPSTREAM_RELAYS) {
     connectUpstream(relay);
@@ -332,6 +792,9 @@ function loadEvents() {
   orderedDirty = true;
   ensureOrderedAsc();
   recomputeDerived();
+  for (const ev of ordered) {
+    maybeHandleBlobEvent(ev, { allowFulfillment: false });
+  }
   console.log(`loaded ${ordered.length} events from ${EVENTS_FILE}`);
 }
 
@@ -356,6 +819,7 @@ function storeEvent(ev) {
   ordered.push(ev);
   ingestDerivedEvent(ev);
   recomputeDerived();
+  maybeHandleBlobEvent(ev, { allowFulfillment: true });
   return true;
 }
 

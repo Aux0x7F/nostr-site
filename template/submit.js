@@ -1,6 +1,7 @@
 import SITE from "../site-config.js";
 import {
   deriveIdentity,
+  uploadEncryptedBlob,
   ensureEventToolsLoaded,
   loadPublicState,
   loadSubmissionThread,
@@ -215,7 +216,7 @@ function renderSubmissionModal() {
           <div class="button-row">
             <button class="button" type="submit">Save submission</button>
           </div>
-          <div class="status-box" data-submission-status>${payload.attachment?.name ? `Current attachment: ${escapeHtml(payload.attachment.name)}` : "Small attachments are embedded with the encrypted submission revision."}</div>
+          <div class="status-box" data-submission-status>${payload.attachment?.name ? `Current attachment: ${escapeHtml(payload.attachment.name)}` : "Attachments are encrypted before upload."}</div>
         </form>
       </section>
     </div>
@@ -330,7 +331,7 @@ async function handleChatSend(form) {
 
 async function buildSubmissionPayload(form, existingPayload) {
   const formData = new FormData(form);
-  const nextAttachment = await readAttachment(formData.get("attachment"));
+  const nextAttachment = await uploadSubmissionAttachment(formData.get("attachment"));
   const sourceLinks = String(formData.get("sourceLinks") || "")
     .split(/\r?\n/)
     .map((value) => value.trim())
@@ -353,24 +354,17 @@ async function buildSubmissionPayload(form, existingPayload) {
   };
 }
 
-async function readAttachment(file) {
+async function uploadSubmissionAttachment(file) {
   if (!(file instanceof File) || file.size === 0) return null;
-  if (file.size > SITE.nostr.maxAttachmentBytes) {
-    throw new Error(`Attachment exceeds ${Math.round(SITE.nostr.maxAttachmentBytes / 1024)} KB.`);
+  if (!SITE.nostr.inboxPubkey) {
+    throw new Error("Encrypted attachments require an inbox pubkey.");
   }
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Attachment could not be read."));
-    reader.readAsDataURL(file);
-  });
-  return {
-    name: file.name,
-    type: file.type || "application/octet-stream",
-    size: file.size,
-    encoding: "data-url",
-    data: dataUrl
-  };
+  return uploadEncryptedBlob(
+    submitState.session.secretKeyHex,
+    SITE.nostr.inboxPubkey,
+    file,
+    { purpose: "submission-attachment" }
+  );
 }
 
 function cleanSubject(value) {

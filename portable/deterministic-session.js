@@ -69,6 +69,7 @@ export function createDeterministicSessionApi(config, deps) {
     if (
       profile.displayName ||
       profile.avatarUrl ||
+      profile.avatarBlob ||
       profile.bio ||
       (Array.isArray(profile.socialLinks) && profile.socialLinks.length)
     ) {
@@ -80,6 +81,7 @@ export function createDeterministicSessionApi(config, deps) {
           username,
           display_name: String(profile.displayName || "").trim(),
           avatar_url: String(profile.avatarUrl || "").trim(),
+          avatar_blob: profile.avatarBlob || null,
           bio: String(profile.bio || "").trim(),
           social_links: Array.isArray(profile.socialLinks)
             ? profile.socialLinks.map((item) => String(item || "").trim()).filter(Boolean)

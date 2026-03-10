@@ -11,8 +11,15 @@ Minified reusable browser library built from the `portable/` source layer.
 
 - `createNostrCmsClient`
 - `createDeterministicSessionApi`
+- `createBlobStoreApi`
 - content parsing and enrichment helpers
 - generic admin key-share and relay-state helpers through `createNostrCmsClient`
+
+`createBlobStoreApi` handles:
+
+- uploads to the configured writable cache host
+- signed `blobRequest` events on cache miss
+- polling relay state for `blobFulfillment` before retrying reads
 
 ## Build
 

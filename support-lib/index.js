@@ -1,5 +1,6 @@
 export { createNostrCmsClient } from "../portable/nostr-cms-core.js";
 export { createDeterministicSessionApi } from "../portable/deterministic-session.js";
+export { createBlobStoreApi } from "../portable/blob-store.js";
 export {
   parseContentDocument,
   enrichEntityReferences,
