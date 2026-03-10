@@ -131,7 +131,9 @@ For Windows hosts, there is also a single-entry bootstrap path:
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner/install.sh | bash
 ```
 
-That host bootstrap can install missing dependencies, update the repo, run the wizard, and register the pinner as a restartable scheduled task.
+Linux is now the primary target for that one-liner. It installs missing dependencies, updates the runtime repo, runs the wizard, and registers the pinner as a restartable `systemd` service. On Windows shells it falls back to the PowerShell host bootstrap path.
+
+For actual deployments, the runtime repo can stay `nostr-site` while the pinner targets a separate site repo for `site-config.js`, `CNAME`, and baked content snapshots.
 
 ## Support library package
 

@@ -38,24 +38,42 @@ Run the local wizard on the pinner host:
 npm run setup:wizard
 npm run gh:check
 npm run bootstrap:host
+npm run bootstrap:linux
 ```
 
-One-line bootstrap for Git Bash / MSYS:
+Primary one-line bootstrap for Linux hosts:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner/install.sh | bash
 ```
 
-That wrapper downloads and runs [host-bootstrap.ps1](C:/projects/nostr-site/peer-pinner/host-bootstrap.ps1), which is the actual Windows host installer.
+That entrypoint now downloads and runs [host-bootstrap.sh](C:/projects/nostr-site/peer-pinner/host-bootstrap.sh) on Linux. On Windows shells it falls back to [host-bootstrap.ps1](C:/projects/nostr-site/peer-pinner/host-bootstrap.ps1).
 
 Useful non-interactive variants:
 
 ```bash
 node setup-wizard.js --check-only --repo=owner/repo --base-branch=main
 node setup-wizard.js --non-interactive --repo=owner/repo --repo-dir=/path/to/site --root-admin-pubkey=<hex>
+bash host-bootstrap.sh --site-repo=owner/site-repo --site-repo-dir=/srv/site --non-interactive
 ```
 
-The host bootstrap script will:
+For a real campaign/site deployment, `--site-repo` and `--site-repo-dir` are the important knobs:
+
+- the runtime repo can stay `Aux0x7F/nostr-site`
+- the site repo is the actual campaign repo whose `site-config.js`, `CNAME`, and baked seed files the pinner should target
+
+The Linux host bootstrap script will:
+
+- install `git`, `gh`, `node`, and `npm` using the host package manager when possible
+- ensure GitHub CLI auth is present for the runtime operator
+- clone or update the reusable runtime repo
+- optionally clone or update a separate site repo for bakedowns and config defaults
+- run `npm ci` and `npm run build:all`
+- run the setup wizard
+- register a restartable `systemd` service, either system-level or user-level depending on available privileges
+- write an `update-peer-pinner.sh` helper so rerunning the bootstrap is the update path
+
+The Windows host bootstrap script will:
 
 - install `node`, `gh`, and `git` via `winget` if they are missing
 - ensure GitHub CLI auth is present for PR automation
@@ -87,7 +105,9 @@ npm start
 
 `peer-pinner.js` automatically loads `peer-pinner/.env.peer-pinner.local` if it exists, so the wizard output is picked up without additional wrapper scripts.
 
-For the Windows host flow, the scheduled task launches `service-runner.ps1`, which loops `dist/peer-pinner.js`, logs to `peer-pinner/data/service-logs/`, and restarts after exit.
+For Linux, the bootstrap creates a `systemd` unit whose `ExecStart` points straight at `dist/peer-pinner.js` with `Restart=always`.
+
+For Windows, the scheduled task launches `service-runner.ps1`, which loops `dist/peer-pinner.js`, logs to `peer-pinner/data/service-logs/`, and restarts after exit.
 
 ## Useful environment variables
 

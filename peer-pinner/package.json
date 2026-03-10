@@ -9,7 +9,9 @@
     "start": "node dist/peer-pinner.js",
     "setup:wizard": "node setup-wizard.js",
     "gh:check": "node setup-wizard.js --check-only",
-    "bootstrap:host": "powershell -ExecutionPolicy Bypass -File host-bootstrap.ps1"
+    "bootstrap:host": "node bootstrap-host.js",
+    "bootstrap:linux": "bash host-bootstrap.sh",
+    "bootstrap:windows": "powershell -ExecutionPolicy Bypass -File host-bootstrap.ps1"
   },
   "dependencies": {
     "nostr-tools": "^2.23.3",
