@@ -1,1 +1,4 @@
 node_modules/
+data/
+setup-output/
+.env.peer-pinner.local

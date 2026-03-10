@@ -72,10 +72,18 @@ Current expectation:
 
 If you adopt this template for another site, treat the live relay layer as the working state and the committed markdown/JSON as the reviewed snapshot.
 
+The intended trust split is:
+
+- root admin authority stays with an actual admin key
+- the pinner only holds its own service signer
+- the shared site inbox key can be wrapped to admins without persisting it on the pinner
+- GitHub access should be limited to branch + PR automation, not direct live-branch writes
+
 ## Security caveats
 
 - Fulfillment-time revocation is handled at the pinner boundary: revoked admins should not be able to trigger new downstream actions once their signer is no longer authorized.
 - This does not revoke access to material already encrypted to an old shared site key. Key rotation is still the missing piece there.
+- If the pinner can push directly to the live deploy branch, it is operationally root-equivalent regardless of the Nostr governance model.
 
 ## Storage caveats
 
@@ -114,7 +122,10 @@ npm run build:support-lib
 cd peer-pinner
 npm install
 npm run build
+npm run setup:wizard
 ```
+
+The wizard writes local pinner config, checks GitHub auth, and can generate a wrapped site inbox bootstrap package for the configured root admin.
 
 ## Support library package
 

@@ -1,3 +1,6 @@
 /dist/
 node_modules/
 peer-pinner/node_modules/
+peer-pinner/.env.peer-pinner.local
+peer-pinner/data/
+peer-pinner/setup-output/

@@ -6,7 +6,9 @@
   "main": "dist/peer-pinner.js",
   "scripts": {
     "build": "node build.js",
-    "start": "node dist/peer-pinner.js"
+    "start": "node dist/peer-pinner.js",
+    "setup:wizard": "node setup-wizard.js",
+    "gh:check": "node setup-wizard.js --check-only"
   },
   "dependencies": {
     "nostr-tools": "^2.23.3",

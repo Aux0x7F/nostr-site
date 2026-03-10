@@ -5,6 +5,12 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const WebSocket = require("ws");
 const { finalizeEvent, nip98 } = require("nostr-tools");
+const {
+  isHex64,
+  loadOrCreatePeerPinnerIdentity,
+} = require("./identity");
+
+loadLocalEnv(path.join(__dirname, ".env.peer-pinner.local"));
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4858);
@@ -33,13 +39,14 @@ const SNAPSHOT_MANAGED_PATH = normalizeRelativePath(process.env.SNAPSHOT_MANAGED
 const SNAPSHOT_MARKER = String(process.env.SNAPSHOT_MARKER || "CMSMETA").trim() || "CMSMETA";
 const GIT_REMOTE = String(process.env.GIT_REMOTE || "origin").trim() || "origin";
 const GITHUB_REPO = String(process.env.GITHUB_REPO || "").trim();
-const GITHUB_TOKEN = String(process.env.GITHUB_TOKEN || "").trim();
+const GITHUB_TOKEN_ENV = String(process.env.GITHUB_TOKEN || "").trim();
 const GITHUB_BASE_BRANCH = String(process.env.GITHUB_BASE_BRANCH || "main").trim() || "main";
 const GITHUB_BRANCH_PREFIX = String(process.env.GITHUB_BRANCH_PREFIX || "nostr-site-bake").trim() || "nostr-site-bake";
 const GITHUB_PR_TITLE_PREFIX = String(process.env.GITHUB_PR_TITLE_PREFIX || "[nostr-site]").trim() || "[nostr-site]";
 const GITHUB_PR_LABELS = String(process.env.GITHUB_PR_LABELS || "nostr-site,bakedown").trim();
 const GIT_AUTHOR_NAME = String(process.env.GIT_AUTHOR_NAME || "nostr-site peer pinner").trim() || "nostr-site peer pinner";
 const GIT_AUTHOR_EMAIL = String(process.env.GIT_AUTHOR_EMAIL || "peer-pinner@local").trim() || "peer-pinner@local";
+const ROOT_ADMIN_PUBKEY = String(process.env.ROOT_ADMIN_PUBKEY || "").trim().toLowerCase();
 const KINDS = {
   snapshot: 34126,
   adminClaim: 34127,
@@ -58,6 +65,9 @@ if (!Number.isFinite(PORT) || PORT <= 0) {
 if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
   throw new Error(`invalid MAX_REQ_EVENTS ${process.env.MAX_REQ_EVENTS}`);
 }
+if (ROOT_ADMIN_PUBKEY && !isHex64(ROOT_ADMIN_PUBKEY)) {
+  throw new Error(`invalid ROOT_ADMIN_PUBKEY ${process.env.ROOT_ADMIN_PUBKEY}`);
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
@@ -75,6 +85,8 @@ let persistWriteOk = 0;
 let persistWriteFail = 0;
 let lastPersistError = "";
 const blobJobs = new Map();
+let githubTokenCache = GITHUB_TOKEN_ENV;
+let githubTokenLoaded = Boolean(GITHUB_TOKEN_ENV);
 
 const upstreams = new Map();
 const model = {
@@ -266,6 +278,9 @@ server.listen(PORT, HOST, () => {
   console.log(`nostr-site peer pinner listening ws://${HOST}:${PORT}`);
   console.log(`events file ${EVENTS_FILE}`);
   console.log(`pinner identity @${PINNER_ALIAS} ${shortKey(INFO_PUBKEY)} (${IDENTITY_FILE})`);
+  if (ROOT_ADMIN_PUBKEY) {
+    console.log(`root admin override ${shortKey(ROOT_ADMIN_PUBKEY)}`);
+  }
   if (UPSTREAM_RELAYS.length > 0) {
     console.log(`upstream mirrors: ${UPSTREAM_RELAYS.join(", ")}`);
   }
@@ -1039,6 +1054,11 @@ function recomputeAdminRoot() {
     if (a.ev.created_at !== b.ev.created_at) return a.ev.created_at - b.ev.created_at;
     return String(a.ev.id || "").localeCompare(String(b.ev.id || ""));
   });
+  if (ROOT_ADMIN_PUBKEY) {
+    const matchingClaim = sorted.find((claim) => claim.pubkey === ROOT_ADMIN_PUBKEY) || null;
+    model.admin = { pubkey: ROOT_ADMIN_PUBKEY, claimEvent: matchingClaim?.ev || null };
+    return;
+  }
   if (sorted.length > 0) {
     model.admin = { pubkey: sorted[0].pubkey, claimEvent: sorted[0].ev };
   } else {
@@ -1424,7 +1444,7 @@ async function syncSnapshotRepo(repoDir, rendered, requestId, snapshotState) {
       // Keep local bake even if push fails.
     }
   }
-  const pr = GITHUB_REPO && GITHUB_TOKEN
+  const pr = GITHUB_REPO
     ? await ensureSnapshotPullRequest(branch, requestId, snapshotState).catch(() => null)
     : null;
   return {
@@ -1694,11 +1714,15 @@ function buildPullRequestBody(requestId, snapshotState) {
 }
 
 async function githubJson(url, options = {}) {
+  const githubToken = await resolveGithubToken();
+  if (!githubToken) {
+    throw new Error("GitHub auth is not configured. Set GITHUB_TOKEN or run gh auth login.");
+  }
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Authorization: `Bearer ${githubToken}`,
       "X-GitHub-Api-Version": "2022-11-28",
       ...(options.body ? { "Content-Type": "application/json; charset=utf-8" } : {})
     },
@@ -1717,116 +1741,18 @@ async function githubJson(url, options = {}) {
   return payload;
 }
 
-function loadOrCreatePeerPinnerIdentity(identityFile, aliasOverride) {
-  const file = String(identityFile || "").trim();
-  if (!file) throw new Error("identity file path required");
-
-  if (fs.existsSync(file)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-      const secret_key_hex = String(raw.secret_key_hex || "").toLowerCase();
-      if (isHex64(secret_key_hex)) {
-        const pubkey = derivePubkey(secret_key_hex);
-        if (isHex64(pubkey)) {
-          const alias = cleanAlias(String(aliasOverride || raw.alias || ""));
-          return {
-            alias: alias || aliasFromPubkey(pubkey),
-            pubkey,
-            secret_key_hex,
-          };
-        }
-      }
-    } catch {
-      // Fall through to regenerate.
-    }
-  }
-
-  const secret_key_hex = generateSecretKeyHex();
-  const pubkey = derivePubkey(secret_key_hex);
-  const alias = cleanAlias(String(aliasOverride || aliasFromPubkey(pubkey)));
-  const out = {
-    protocol: "nostr-site-peer-pinner-identity/v1",
-    created_at: Math.floor(Date.now() / 1000),
-    alias,
-    pubkey,
-    secret_key_hex,
-  };
-  fs.writeFileSync(file, JSON.stringify(out, null, 2), { encoding: "utf8", mode: 0o600 });
+async function resolveGithubToken() {
+  if (githubTokenLoaded) return githubTokenCache;
+  githubTokenLoaded = true;
   try {
-    fs.chmodSync(file, 0o600);
+    githubTokenCache = String(execFileSync("gh", ["auth", "token"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }) || "").trim();
   } catch {
-    // Non-posix filesystems may ignore mode.
+    githubTokenCache = "";
   }
-  return out;
-}
-
-function derivePubkey(secretKeyHex) {
-  const sk = Buffer.from(secretKeyHex, "hex");
-  const ecdh = crypto.createECDH("secp256k1");
-  ecdh.setPrivateKey(sk);
-  const uncompressed = ecdh.getPublicKey(null, "uncompressed");
-  return Buffer.from(uncompressed).subarray(1, 33).toString("hex");
-}
-
-function generateSecretKeyHex() {
-  const secpOrder = BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
-  while (true) {
-    const bytes = crypto.randomBytes(32);
-    const val = BigInt(`0x${bytes.toString("hex")}`);
-    if (val > 0n && val < secpOrder) {
-      return bytes.toString("hex");
-    }
-  }
-}
-
-function cleanAlias(v) {
-  return String(v || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-}
-
-function aliasFromPubkey(pubkey) {
-  const a = [
-    "amber", "atlas", "brisk", "cedar", "clear", "cobalt", "copper", "crisp",
-    "delta", "ember", "fable", "fierce", "flint", "glint", "gold", "granite",
-    "harbor", "hollow", "ion", "iron", "juniper", "kindle", "lattice", "lunar",
-    "marble", "mesa", "mint", "moss", "nova", "onyx", "opal", "orbit",
-    "pine", "plume", "pulse", "quartz", "rally", "ridge", "river", "rust",
-    "sage", "scarlet", "signal", "silver", "slate", "solar", "sparrow", "spruce",
-    "stone", "swift", "timber", "topaz", "trail", "union", "velvet", "vivid",
-    "wave", "west", "whistle", "wild", "winter", "zenith", "zephyr", "zinc",
-  ];
-  const b = [
-    "anchor", "arrow", "beacon", "blaze", "branch", "bridge", "brook", "canyon",
-    "castle", "circle", "cloud", "comet", "crow", "dawn", "drift", "echo",
-    "elm", "falcon", "field", "flare", "forest", "forge", "glacier", "grove",
-    "harvest", "horizon", "isle", "junction", "lake", "lantern", "meadow", "meridian",
-    "mountain", "north", "oak", "ocean", "path", "peak", "prairie", "ray",
-    "reef", "resin", "road", "rook", "shore", "sierra", "sky", "spring",
-    "star", "summit", "thunder", "tide", "torch", "tower", "valley", "vista",
-    "voyage", "water", "willow", "wind", "wolf", "yard", "yonder", "zen",
-  ];
-  const c = [
-    "alliance", "anthem", "arc", "banner", "beat", "bridge", "cadence", "call",
-    "chorus", "collective", "current", "drum", "echo", "flame", "flow", "frame",
-    "fuse", "gather", "groove", "harbor", "harmony", "hinge", "hymn", "line",
-    "link", "march", "marker", "matrix", "movement", "north", "orbit", "origin",
-    "pattern", "peak", "phase", "pulse", "rally", "record", "relay", "rhythm",
-    "rise", "route", "signal", "spark", "spectrum", "spirit", "stone", "stream",
-    "stride", "thread", "tide", "tone", "track", "union", "vector", "verse",
-    "vibe", "voice", "wave", "waypoint", "wing", "witness", "yard", "zero",
-  ];
-  const hash = crypto.createHash("sha256").update(Buffer.from(pubkey, "hex")).digest();
-  const p1 = a[hash[0] % a.length];
-  const p2 = b[hash[13] % b.length];
-  const p3 = c[hash[27] % c.length];
-  return `${p1}-${p2}-${p3}`;
-}
-
-function isHex64(v) {
-  return typeof v === "string" && /^[0-9a-f]{64}$/i.test(v);
+  return githubTokenCache;
 }
 
 function shortKey(pk) {
@@ -1867,5 +1793,20 @@ function fileSizeSafe(file) {
     return fs.statSync(file).size;
   } catch {
     return -1;
+  }
+}
+
+function loadLocalEnv(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const lines = String(fs.readFileSync(filePath, "utf8") || "").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = String(line || "").trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (!key || process.env[key]) continue;
+    process.env[key] = value;
   }
 }
