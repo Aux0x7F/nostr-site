@@ -12,6 +12,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - a reusable browser support library for follow-on sites
 - guest-backed visit telemetry for lightweight dashboard metrics
 - submit-side pending entity suggestions that admins can moderate later
+- admin-requested seed bakedowns with optional GitHub PR sync via peer pinner
 
 ## Structure
 
@@ -54,12 +55,19 @@ Live relay state can enrich or override that material at runtime. If relays are 
 
 ## Bakedowns and pull requests
 
-The long-term path is for peer pinner to materialize approved cleartext events into seed files and append them to tagged GitHub pull requests for human review. That bridge is a process contract in this repo, but not a complete end-to-end GitHub automation stack yet.
+Peer pinner can now fulfill signed admin snapshot requests by:
+
+- materializing approved cleartext content into deterministic seed files
+- writing a local snapshot tree under the pinner snapshot directory
+- optionally syncing those files into a configured site repo
+- optionally force-updating a dedicated bakedown branch and opening or reusing a GitHub PR
 
 Current expectation:
 
-- live drafts and entities can appear dynamically first
-- approved cleartext items are then baked down into `content/blog/` and `content/data/entities.json`
+- live drafts and entities appear dynamically first
+- an admin requests a bakedown from the workspace dashboard
+- peer pinner writes reviewed seed files such as `content/blog/` and `content/data/entities.json`
+- if GitHub env is configured on the pinner host, it pushes the bakedown branch and reuses or opens a PR
 - a human with GitHub access reviews and merges the resulting PR or committed snapshot
 
 If you adopt this template for another site, treat the live relay layer as the working state and the committed markdown/JSON as the reviewed snapshot.

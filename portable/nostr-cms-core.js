@@ -367,11 +367,13 @@ async function fetchPublicState() {
     const filters = [
       {
         kinds: [
+          config.nostr.kinds.snapshot,
           config.nostr.kinds.adminClaim,
           config.nostr.kinds.adminRole,
           config.nostr.kinds.userMod,
           config.nostr.kinds.nameClaim,
           config.nostr.kinds.profile,
+          config.nostr.kinds.snapshotRequest,
           config.nostr.kinds.entity,
           config.nostr.kinds.draft,
           config.nostr.kinds.comment,
@@ -413,6 +415,8 @@ function buildPublicState(events, seedEntities = []) {
   const userModEvents = [];
   const commentModEvents = [];
   const submissionStatusEvents = [];
+  const snapshotEvents = [];
+  const snapshotRequestEvents = [];
   const nameClaims = new Map();
   const profiles = new Map();
   const entities = new Map();
@@ -473,6 +477,25 @@ function buildPublicState(events, seedEntities = []) {
       continue;
     }
 
+    if (kind === config.nostr.kinds.snapshot) {
+      const payload = parseObject(event.content);
+      if (!payload || !Array.isArray(payload.entries)) continue;
+      snapshotEvents.push({
+        event,
+        id: event.id,
+        pubkey: normalizePubkey(event.pubkey),
+        version_ts: toUnix(payload?.version_ts || firstTag(event, "version") || event.created_at),
+        generated_at: String(payload?.generated_at || "").trim(),
+        requested_by: normalizePubkey(payload?.requested_by || firstTag(event, "p")),
+        admin_pubkey: normalizePubkey(payload?.admin_pubkey || ""),
+        entries: payload.entries,
+        counts: payload?.counts && typeof payload.counts === "object" ? payload.counts : {},
+        git: payload?.git && typeof payload.git === "object" ? payload.git : null,
+        status: String(payload?.status || "ready").trim() || "ready"
+      });
+      continue;
+    }
+
     if (kind === config.nostr.kinds.userMod) {
       const payload = parseObject(event.content);
       const action = String(payload?.action || payload?.op || firstTag(event, "op") || "").trim();
@@ -519,6 +542,20 @@ function buildPublicState(events, seedEntities = []) {
         _event: event
       };
       mergeLatest(profiles, next.pubkey, next);
+      continue;
+    }
+
+    if (kind === config.nostr.kinds.snapshotRequest) {
+      const payload = parseObject(event.content);
+      snapshotRequestEvents.push({
+        event,
+        id: event.id,
+        pubkey: normalizePubkey(event.pubkey),
+        request_id: String(payload?.request_id || firstTag(event, "req") || firstTag(event, "d") || event.id).trim(),
+        op: String(payload?.op || firstTag(event, "op") || "latest").trim() || "latest",
+        requested_at: String(payload?.requested_at || "").trim(),
+        created_at: toUnix(event.created_at)
+      });
       continue;
     }
 
@@ -692,6 +729,7 @@ function buildPublicState(events, seedEntities = []) {
     );
   }
   const visitMetrics = computeVisitMetrics(visitEvents);
+  const latestSnapshot = computeLatestSnapshot(snapshotEvents);
 
   const allPubkeys = new Set([
     ...seenPubkeys,
@@ -750,6 +788,8 @@ function buildPublicState(events, seedEntities = []) {
     blobFulfillments,
     submissionStatuses,
     submissionCountByAuthor,
+    snapshotInfo: latestSnapshot,
+    snapshotRequests: snapshotRequestEvents.sort((left, right) => compareEventDesc(left.event, right.event)),
     visits: visitMetrics.events,
     metrics: {
       userCount: users.length,
@@ -759,6 +799,7 @@ function buildPublicState(events, seedEntities = []) {
       hiddenCommentCount: hiddenComments.length,
       entityCount: entityList.length,
       approvedEntityCount: entityList.filter((entity) => entity.status === "approved").length,
+      snapshotCount: snapshotEvents.length,
       visitorCount24h: visitMetrics.visitorCount24h,
       visitorCount7d: visitMetrics.visitorCount7d,
       visitEventCount7d: visitMetrics.visitEventCount7d
@@ -873,6 +914,14 @@ function computeVisitMetrics(events) {
   };
 }
 
+function computeLatestSnapshot(events) {
+  const sorted = [...events].sort((left, right) => {
+    if (left.version_ts !== right.version_ts) return right.version_ts - left.version_ts;
+    return compareEventDesc(left.event, right.event);
+  });
+  return sorted[0] || null;
+}
+
 function groupSubmissions(items) {
   const grouped = new Map();
   for (const item of items) {
@@ -915,6 +964,8 @@ function emptyPublicState(error, seedEntities = []) {
     blobFulfillments: new Map(),
     submissionStatuses: new Map(),
     submissionCountByAuthor: new Map(),
+    snapshotInfo: null,
+    snapshotRequests: [],
     visits: [],
     metrics: {
       userCount: 0,
@@ -924,6 +975,7 @@ function emptyPublicState(error, seedEntities = []) {
       hiddenCommentCount: 0,
       entityCount: entities.length,
       approvedEntityCount: approvedEntities.length,
+      snapshotCount: 0,
       visitorCount24h: 0,
       visitorCount7d: 0,
       visitEventCount7d: 0

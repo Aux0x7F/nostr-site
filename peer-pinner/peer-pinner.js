@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const WebSocket = require("ws");
 const { finalizeEvent, nip98 } = require("nostr-tools");
 
@@ -11,24 +12,42 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const EVENTS_FILE = process.env.EVENTS_FILE || path.join(DATA_DIR, "events.ndjson");
 const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "peer-pinner-identity.json");
 const BLOBS_DIR = process.env.BLOBS_DIR || path.join(DATA_DIR, "blobs");
+const SNAPSHOT_DIR = process.env.SNAPSHOT_DIR || path.join(DATA_DIR, "snapshot");
 const INFO_NAME = process.env.PINNER_NAME || "Nostr Site Peer Pinner";
 const INFO_DESC = process.env.PINNER_DESCRIPTION || "Mirrors + pins tagged relay events for downstream Nostr site consumers";
 const PINNER_PUBKEY_OVERRIDE = process.env.PINNER_PUBKEY || "";
 const PINNER_ALIAS_OVERRIDE = process.env.PINNER_ALIAS || "";
 const MAX_REQ_EVENTS = Number(process.env.MAX_REQ_EVENTS || 5000);
 const TAG_FILTER = String(process.env.APP_TAG || "nostr-site-template").trim();
-const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34127,34128,34129,34130,34131,34133,34134,34135,34136,34137,34138,34139,34140");
+const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34126,34127,34128,34129,34130,34131,34132,34133,34134,34135,34136,34137,34138,34139,34140");
 const UPSTREAM_RELAYS = parseRelays(process.env.UPSTREAM_RELAYS || "wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol");
 const UPSTREAM_BACKFILL_LIMIT = Number(process.env.UPSTREAM_BACKFILL_LIMIT || 7000);
 const UPSTREAM_RECONNECT_MS = Number(process.env.UPSTREAM_RECONNECT_MS || 2500);
 const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_BYTES || 2000000);
 const BLOB_CACHE_BASE_URL = String(process.env.BLOB_CACHE_BASE_URL || "https://blossom.band").trim();
+const SNAPSHOT_REPO_DIR = String(process.env.SNAPSHOT_REPO_DIR || "").trim();
+const SNAPSHOT_BLOG_DIR = normalizeRelativePath(process.env.SNAPSHOT_BLOG_DIR || "content/blog");
+const SNAPSHOT_BLOG_INDEX = normalizeRelativePath(process.env.SNAPSHOT_BLOG_INDEX || `${SNAPSHOT_BLOG_DIR}/index.json`);
+const SNAPSHOT_ENTITIES_PATH = normalizeRelativePath(process.env.SNAPSHOT_ENTITIES_PATH || "content/data/entities.json");
+const SNAPSHOT_MANAGED_PATH = normalizeRelativePath(process.env.SNAPSHOT_MANAGED_PATH || ".nostr-site-pinner-managed.json");
+const SNAPSHOT_MARKER = String(process.env.SNAPSHOT_MARKER || "CMSMETA").trim() || "CMSMETA";
+const GIT_REMOTE = String(process.env.GIT_REMOTE || "origin").trim() || "origin";
+const GITHUB_REPO = String(process.env.GITHUB_REPO || "").trim();
+const GITHUB_TOKEN = String(process.env.GITHUB_TOKEN || "").trim();
+const GITHUB_BASE_BRANCH = String(process.env.GITHUB_BASE_BRANCH || "main").trim() || "main";
+const GITHUB_BRANCH_PREFIX = String(process.env.GITHUB_BRANCH_PREFIX || "nostr-site-bake").trim() || "nostr-site-bake";
+const GITHUB_PR_TITLE_PREFIX = String(process.env.GITHUB_PR_TITLE_PREFIX || "[nostr-site]").trim() || "[nostr-site]";
+const GITHUB_PR_LABELS = String(process.env.GITHUB_PR_LABELS || "nostr-site,bakedown").trim();
+const GIT_AUTHOR_NAME = String(process.env.GIT_AUTHOR_NAME || "nostr-site peer pinner").trim() || "nostr-site peer pinner";
+const GIT_AUTHOR_EMAIL = String(process.env.GIT_AUTHOR_EMAIL || "peer-pinner@local").trim() || "peer-pinner@local";
 const KINDS = {
   snapshot: 34126,
   adminClaim: 34127,
   adminRole: 34128,
   nameClaim: 34130,
   snapshotRequest: 34132,
+  entity: 34133,
+  draft: 34134,
   blobRequest: 34139,
   blobFulfillment: 34140,
 };
@@ -43,6 +62,7 @@ if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
 fs.mkdirSync(BLOBS_DIR, { recursive: true });
+fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
 if (!fs.existsSync(EVENTS_FILE)) fs.writeFileSync(EVENTS_FILE, "", { encoding: "utf8" });
 const pinnerIdentity = loadOrCreatePeerPinnerIdentity(IDENTITY_FILE, PINNER_ALIAS_OVERRIDE);
 const PINNER_ALIAS = PINNER_ALIAS_OVERRIDE || pinnerIdentity.alias;
@@ -195,7 +215,7 @@ wss.on("connection", (ws) => {
       wsSend(ws, ["OK", ev.id, true, "stored"]);
       publishToUpstreams(ev, "");
       broadcastEvent(ev);
-      maybeShareSnapshotForRequest(ev, "");
+      void maybeShareSnapshotForRequest(ev, "");
       return;
     }
     if (cmd === "REQ") {
@@ -735,7 +755,7 @@ function connectUpstream(relay) {
       if (eventsById.has(ev.id)) return;
       if (!storeEvent(ev)) return;
       broadcastEvent(ev);
-      maybeShareSnapshotForRequest(ev, relay);
+      void maybeShareSnapshotForRequest(ev, relay);
     }
   });
 
@@ -1091,7 +1111,7 @@ function recomputeSnapshotChoice() {
   }
   for (const s of model.snapshotEvents) {
     const signer = normPk(s.ev.pubkey);
-    if (!model.admins.has(signer)) continue;
+    if (!model.admins.has(signer) && signer !== INFO_PUBKEY) continue;
     if (s.admin_pubkey && s.admin_pubkey !== model.admin.pubkey) continue;
     if (!win) {
       win = s;
@@ -1114,17 +1134,306 @@ function recomputeSnapshotChoice() {
   model.snapshot = win || null;
 }
 
-function maybeShareSnapshotForRequest(ev, originRelay) {
+async function maybeShareSnapshotForRequest(ev, originRelay) {
   if (!ev || Number(ev.kind) !== KINDS.snapshotRequest) return false;
   const p = parseObj(ev.content);
   if (!p) return false;
   const req = cleanRequestId(p.request_id || firstTag(ev, "req"));
   if (!req || model.snapshotRequestsSeen.has(req)) return false;
   model.snapshotRequestsSeen.add(req);
+  if (!isSnapshotRequestAuthorized(ev)) return false;
+  const op = String(p.op || firstTag(ev, "op") || "latest").trim().toLowerCase();
+  if (op === "bake" || !model.snapshot?.ev) {
+    const generated = await generateSnapshot(ev, p).catch(() => null);
+    return Boolean(generated);
+  }
   if (!model.snapshot?.ev) return false;
   publishToUpstreams(model.snapshot.ev, String(originRelay || ""));
   broadcastEvent(model.snapshot.ev);
   return true;
+}
+
+function isSnapshotRequestAuthorized(ev) {
+  const requester = normPk(ev?.pubkey);
+  return isHex64(requester) && model.admins.has(requester);
+}
+
+async function generateSnapshot(requestEvent, payload = {}) {
+  const requestId = cleanRequestId(payload.request_id || firstTag(requestEvent, "req") || firstTag(requestEvent, "d") || requestEvent.id);
+  const requestedBy = normPk(requestEvent.pubkey);
+  const versionTs = Math.floor(Date.now() / 1000);
+  const generatedAt = new Date(versionTs * 1000).toISOString();
+  const snapshotState = collectApprovedSnapshotState();
+  const rendered = renderSnapshotFiles(snapshotState);
+  const localRoot = path.join(SNAPSHOT_DIR, "current");
+  writeSnapshotTree(localRoot, rendered);
+  const git = SNAPSHOT_REPO_DIR
+    ? await syncSnapshotRepo(SNAPSHOT_REPO_DIR, rendered, requestId, snapshotState).catch(() => null)
+    : null;
+  const entries = buildSnapshotEntries(localRoot, rendered.fileEntries);
+  const snapshotEvent = signAppEvent({
+    kind: KINDS.snapshot,
+    tags: [
+      ["d", `snapshot:${versionTs}`],
+      ["req", requestId],
+      ["p", requestedBy],
+      ["version", String(versionTs)]
+    ],
+    content: {
+      protocol: `${TAG_FILTER}-snapshot/v1`,
+      status: "ready",
+      request_id: requestId,
+      requested_by: requestedBy,
+      admin_pubkey: normPk(model.admin.pubkey || ""),
+      generated_at: generatedAt,
+      version_ts: versionTs,
+      counts: {
+        entities: snapshotState.entities.length,
+        posts: snapshotState.posts.length
+      },
+      entries,
+      git
+    }
+  });
+  if (!storeEvent(snapshotEvent)) return null;
+  publishToUpstreams(snapshotEvent, "");
+  broadcastEvent(snapshotEvent);
+  return snapshotEvent;
+}
+
+function collectApprovedSnapshotState() {
+  ensureOrderedAsc();
+  const entities = new Map();
+  const drafts = new Map();
+  for (const ev of ordered) {
+    const kind = Number(ev.kind);
+    if (kind === KINDS.entity) {
+      const next = parseSnapshotEntityEvent(ev);
+      if (next) mergeLatestByEvent(entities, next.slug, next);
+      continue;
+    }
+    if (kind === KINDS.draft) {
+      const next = parseSnapshotDraftEvent(ev);
+      if (next) mergeLatestByEvent(drafts, next.slug, next);
+    }
+  }
+  const approvedEntities = [...entities.values()]
+    .map((entity) => ({
+      ...entity,
+      status: entity.status || (model.admins.has(entity.author) ? "approved" : "pending")
+    }))
+    .filter((entity) => entity.status === "approved")
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const approvedPosts = [...drafts.values()]
+    .filter((draft) => isBakeableDraftStatus(draft.status))
+    .sort((left, right) => {
+      if (left.date !== right.date) return String(right.date).localeCompare(String(left.date));
+      return compareEventAsc(left._event, right._event) * -1;
+    });
+  return {
+    entities: approvedEntities,
+    posts: approvedPosts
+  };
+}
+
+function parseSnapshotEntityEvent(ev) {
+  const payload = parseObj(ev.content);
+  if (!payload) return null;
+  const slug = slugifyValue(payload.slug || firstTag(ev, "d") || payload.name || "");
+  if (!slug) return null;
+  return {
+    slug,
+    author: normPk(ev.pubkey),
+    name: String(payload.name || slug).trim(),
+    location: String(payload.location || "Undisclosed location").trim(),
+    type: String(payload.type || "entity").trim(),
+    lat: numberOrNull(payload.lat),
+    lng: numberOrNull(payload.lng),
+    notes: String(payload.notes || "").trim(),
+    aliases: Array.isArray(payload.aliases)
+      ? payload.aliases.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    status: String(payload.status || "").trim(),
+    created_at: unixOr(ev.created_at, 0),
+    id: ev.id,
+    _event: ev
+  };
+}
+
+function parseSnapshotDraftEvent(ev) {
+  const payload = parseObj(ev.content);
+  if (!payload) return null;
+  const slug = slugifyValue(payload.slug || firstTag(ev, "d") || payload.title || "");
+  if (!slug) return null;
+  return {
+    slug,
+    author: normPk(ev.pubkey),
+    title: String(payload.title || slug).trim(),
+    summary: String(payload.summary || "").trim(),
+    location: String(payload.location || "Undisclosed location").trim(),
+    status: String(payload.status || "draft").trim(),
+    tags: Array.isArray(payload.tags) ? payload.tags.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    records: Array.isArray(payload.records) ? payload.records : [],
+    markdown: String(payload.markdown || "").trim(),
+    featured: Boolean(payload.featured),
+    date: String(payload.date || new Date(unixOr(ev.created_at, 0) * 1000).toISOString().slice(0, 10)),
+    entity_refs: Array.isArray(payload.entity_refs)
+      ? payload.entity_refs.map((item) => slugifyValue(item)).filter(Boolean)
+      : [],
+    created_at: unixOr(ev.created_at, 0),
+    id: ev.id,
+    _event: ev
+  };
+}
+
+function isBakeableDraftStatus(statusValue) {
+  const status = String(statusValue || "").trim().toLowerCase();
+  return ["approved", "published", "public", "live", "placeholder"].includes(status);
+}
+
+function renderSnapshotFiles(snapshotState) {
+  const fileEntries = [];
+  const files = new Map();
+  const blogFiles = [];
+
+  for (const post of snapshotState.posts) {
+    const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(post.date) ? post.date : new Date().toISOString().slice(0, 10);
+    const fileName = `${safeDate}-${post.slug}.md`;
+    const relPath = joinRelativePath(SNAPSHOT_BLOG_DIR, fileName);
+    files.set(relPath, buildSnapshotMarkdown(post));
+    blogFiles.push(fileName);
+    fileEntries.push({
+      path: relPath,
+      slug: post.slug,
+      type: "post"
+    });
+  }
+
+  files.set(SNAPSHOT_BLOG_INDEX, `${JSON.stringify({ files: blogFiles }, null, 2)}\n`);
+  files.set(
+    SNAPSHOT_ENTITIES_PATH,
+    `${JSON.stringify({
+      entities: snapshotState.entities.map((entity) => ({
+        slug: entity.slug,
+        name: entity.name,
+        location: entity.location,
+        type: entity.type,
+        lat: entity.lat,
+        lng: entity.lng,
+        notes: entity.notes,
+        aliases: entity.aliases,
+        status: "approved"
+      }))
+    }, null, 2)}\n`
+  );
+  fileEntries.push({ path: SNAPSHOT_BLOG_INDEX, type: "index" });
+  fileEntries.push({ path: SNAPSHOT_ENTITIES_PATH, type: "entities" });
+
+  return { files, fileEntries };
+}
+
+function buildSnapshotMarkdown(post) {
+  const meta = {
+    slug: post.slug,
+    title: post.title || post.slug,
+    date: post.date || new Date().toISOString().slice(0, 10),
+    location: post.location || "Undisclosed location",
+    status: post.status || "published",
+    summary: post.summary || "",
+    featured: Boolean(post.featured),
+    tags: Array.isArray(post.tags) ? dedupeStrings(post.tags) : [],
+    records: Array.isArray(post.records) ? post.records : [],
+    entity_refs: Array.isArray(post.entity_refs) ? dedupeStrings(post.entity_refs.map((item) => slugifyValue(item))) : []
+  };
+  return `<!--${SNAPSHOT_MARKER}\n${JSON.stringify(meta, null, 2)}\n-->\n\n${String(post.markdown || "").trim()}\n`;
+}
+
+function writeSnapshotTree(targetRoot, rendered) {
+  const root = path.resolve(String(targetRoot || "").trim());
+  if (!root) throw new Error("snapshot target root is required");
+  fs.mkdirSync(root, { recursive: true });
+  const manifestPath = safeJoinRoot(root, SNAPSHOT_MANAGED_PATH);
+  const currentManifest = readManagedManifest(manifestPath);
+  const nextManaged = [];
+  for (const [relPath, content] of rendered.files.entries()) {
+    const targetPath = safeJoinRoot(root, relPath);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, String(content), "utf8");
+    nextManaged.push(relPath);
+  }
+  for (const relPath of currentManifest.paths) {
+    if (nextManaged.includes(relPath)) continue;
+    const targetPath = safeJoinRoot(root, relPath);
+    if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { force: true });
+  }
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      protocol: "nostr-site-pinner-managed/v1",
+      updated_at: new Date().toISOString(),
+      paths: nextManaged.sort()
+    }, null, 2),
+    "utf8"
+  );
+  return {
+    root,
+    managedPaths: nextManaged.sort()
+  };
+}
+
+function buildSnapshotEntries(root, fileEntries) {
+  return fileEntries.map((entry) => {
+    const filePath = safeJoinRoot(root, entry.path);
+    const buffer = fs.readFileSync(filePath);
+    return {
+      path: entry.path,
+      type: entry.type,
+      slug: entry.slug || "",
+      sha256: hashBuffer(buffer),
+      bytes: buffer.length
+    };
+  });
+}
+
+async function syncSnapshotRepo(repoDir, rendered, requestId, snapshotState) {
+  const root = ensureGitRepoRoot(repoDir);
+  const branch = buildBakeBranchName();
+  resetBakeBranch(root, branch);
+  const write = writeSnapshotTree(root, rendered);
+  const managedPaths = [...write.managedPaths, SNAPSHOT_MANAGED_PATH];
+  runGit(root, ["add", "--", ...managedPaths]);
+  let commit = runGit(root, ["rev-parse", "HEAD"]).trim();
+  let changed = false;
+  try {
+    runGit(root, ["diff", "--cached", "--quiet", "--exit-code"]);
+  } catch {
+    changed = true;
+  }
+  if (changed) {
+    runGit(root, [
+      "-c", `user.name=${GIT_AUTHOR_NAME}`,
+      "-c", `user.email=${GIT_AUTHOR_EMAIL}`,
+      "commit",
+      "-m", `Bake snapshot for ${TAG_FILTER}`
+    ]);
+    commit = runGit(root, ["rev-parse", "HEAD"]).trim();
+    try {
+      runGit(root, ["push", "--force-with-lease", "-u", GIT_REMOTE, branch]);
+    } catch {
+      // Keep local bake even if push fails.
+    }
+  }
+  const pr = GITHUB_REPO && GITHUB_TOKEN
+    ? await ensureSnapshotPullRequest(branch, requestId, snapshotState).catch(() => null)
+    : null;
+  return {
+    branch,
+    commit,
+    pr_url: pr?.html_url || "",
+    pr_number: Number(pr?.number || 0) || 0,
+    changed
+  };
 }
 
 function resolveUserExists(aliasInput) {
@@ -1216,6 +1525,196 @@ function cleanRequestId(v) {
     .toLowerCase()
     .replace(/[^a-z0-9:_-]+/g, "")
     .slice(0, 80);
+}
+
+function mergeLatestByEvent(map, key, next) {
+  const current = map.get(key);
+  if (!current || compareEventAsc(current._event, next._event) < 0) {
+    map.set(key, next);
+  }
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function slugifyValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function dedupeStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function normalizeRelativePath(value) {
+  const normalized = path.posix
+    .normalize(String(value || "").trim().replace(/\\/g, "/"))
+    .replace(/^\/+/, "");
+  if (!normalized || normalized === ".") return "";
+  if (normalized.startsWith("..")) {
+    throw new Error(`relative path escapes target root: ${value}`);
+  }
+  return normalized;
+}
+
+function joinRelativePath(...parts) {
+  return normalizeRelativePath(parts.filter(Boolean).join("/"));
+}
+
+function safeJoinRoot(root, relativePath) {
+  const base = path.resolve(String(root || "").trim());
+  const relative = normalizeRelativePath(relativePath);
+  const target = path.resolve(base, ...relative.split("/"));
+  const prefix = `${base}${path.sep}`;
+  if (target !== base && !target.startsWith(prefix)) {
+    throw new Error(`path escapes root: ${relativePath}`);
+  }
+  return target;
+}
+
+function readManagedManifest(manifestPath) {
+  try {
+    const payload = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return {
+      paths: Array.isArray(payload?.paths)
+        ? payload.paths.map((item) => normalizeRelativePath(item)).filter(Boolean)
+        : []
+    };
+  } catch {
+    return { paths: [] };
+  }
+}
+
+function ensureGitRepoRoot(repoDir) {
+  const root = runGit(repoDir, ["rev-parse", "--show-toplevel"]).trim();
+  if (!root) throw new Error("git repo root not found");
+  return root;
+}
+
+function buildBakeBranchName() {
+  return `${sanitizeBranchSegment(GITHUB_BRANCH_PREFIX)}/${sanitizeBranchSegment(TAG_FILTER)}`;
+}
+
+function sanitizeBranchSegment(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, "-")
+    .replace(/\/+/g, "/")
+    .replace(/^-+|-+$/g, "")
+    .replace(/^\/+|\/+$/g, "") || "snapshot";
+}
+
+function resetBakeBranch(repoRoot, branch) {
+  try {
+    runGit(repoRoot, ["fetch", GIT_REMOTE, GITHUB_BASE_BRANCH]);
+  } catch {
+    // Continue with local refs only.
+  }
+  const remoteBase = `${GIT_REMOTE}/${GITHUB_BASE_BRANCH}`;
+  try {
+    runGit(repoRoot, ["checkout", "-B", branch, remoteBase]);
+    return;
+  } catch {
+    // fall through
+  }
+  try {
+    runGit(repoRoot, ["checkout", "-B", branch, GITHUB_BASE_BRANCH]);
+    return;
+  } catch {
+    // fall through
+  }
+  runGit(repoRoot, ["checkout", "-B", branch]);
+}
+
+function runGit(repoRoot, args) {
+  try {
+    return execFileSync("git", args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr || error?.message || "git command failed").trim();
+    throw new Error(stderr || "git command failed");
+  }
+}
+
+async function ensureSnapshotPullRequest(branch, requestId, snapshotState) {
+  const [owner] = GITHUB_REPO.split("/");
+  if (!owner) throw new Error("GitHub repo owner is required.");
+  const pullsUrl = new URL(`https://api.github.com/repos/${GITHUB_REPO}/pulls`);
+  pullsUrl.searchParams.set("state", "open");
+  pullsUrl.searchParams.set("head", `${owner}:${branch}`);
+  const existing = await githubJson(pullsUrl.toString());
+  if (Array.isArray(existing) && existing[0]) {
+    await maybeApplyPullRequestLabels(existing[0].number);
+    return existing[0];
+  }
+  const created = await githubJson(`https://api.github.com/repos/${GITHUB_REPO}/pulls`, {
+    method: "POST",
+    body: JSON.stringify({
+      title: `${GITHUB_PR_TITLE_PREFIX} Bake snapshot for ${TAG_FILTER}`,
+      body: buildPullRequestBody(requestId, snapshotState),
+      head: branch,
+      base: GITHUB_BASE_BRANCH
+    })
+  });
+  await maybeApplyPullRequestLabels(created?.number);
+  return created;
+}
+
+async function maybeApplyPullRequestLabels(prNumber) {
+  const labels = GITHUB_PR_LABELS
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!prNumber || !labels.length) return;
+  await githubJson(`https://api.github.com/repos/${GITHUB_REPO}/issues/${prNumber}/labels`, {
+    method: "POST",
+    body: JSON.stringify({ labels })
+  });
+}
+
+function buildPullRequestBody(requestId, snapshotState) {
+  return [
+    `Automated bakedown for \`${TAG_FILTER}\`.`,
+    "",
+    `- Request: \`${requestId}\``,
+    `- Approved posts: ${snapshotState.posts.length}`,
+    `- Approved entities: ${snapshotState.entities.length}`,
+    "",
+    "Merge this PR after reviewing the generated seed files."
+  ].join("\n");
+}
+
+async function githubJson(url, options = {}) {
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(options.body ? { "Content-Type": "application/json; charset=utf-8" } : {})
+    },
+    body: options.body
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(String(payload?.message || text || `GitHub request failed with ${response.status}.`));
+  }
+  return payload;
 }
 
 function loadOrCreatePeerPinnerIdentity(identityFile, aliasOverride) {

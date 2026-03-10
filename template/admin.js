@@ -27,7 +27,8 @@ const workspaceState = {
   activeTab: "login",
   entityModal: null,
   chatModal: null,
-  exportValue: ""
+  exportValue: "",
+  dashboardStatus: ""
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -108,6 +109,12 @@ function bindWorkspace() {
     const attachmentAction = target.closest("[data-download-attachment]");
     if (attachmentAction) {
       await handleAttachmentDownload(attachmentAction);
+      return;
+    }
+
+    const snapshotRequest = target.closest("[data-request-snapshot]");
+    if (snapshotRequest) {
+      await handleSnapshotRequest(snapshotRequest);
       return;
     }
 
@@ -264,17 +271,30 @@ function renderDashboardPane() {
   const locationCount = new Set(
     (workspaceState.publicState?.approvedEntities || []).map((entity) => entity.location).filter(Boolean)
   ).size;
+  const snapshot = workspaceState.publicState?.snapshotInfo || null;
   return `
-    <section class="metric-grid">
-      <article class="metric-card"><strong>${metrics.visitorCount24h || 0}</strong><p>Visitors (24h)</p></article>
-      <article class="metric-card"><strong>${metrics.visitorCount7d || 0}</strong><p>Visitors (7d)</p></article>
-      <article class="metric-card"><strong>${metrics.userCount || 0}</strong><p>Known users</p></article>
-      <article class="metric-card"><strong>${metrics.submissionCount || 0}</strong><p>Submission threads</p></article>
-      <article class="metric-card"><strong>${locationCount}</strong><p>Tracked locations</p></article>
-      <article class="metric-card"><strong>${metrics.approvedEntityCount || 0}</strong><p>Approved entities</p></article>
-      <article class="metric-card"><strong>${metrics.commentCount || 0}</strong><p>Visible comments</p></article>
-      <article class="metric-card"><strong>${metrics.visitEventCount7d || 0}</strong><p>Visit pulses (7d)</p></article>
-    </section>
+    <div class="workspace-grid">
+      <section class="metric-grid">
+        <article class="metric-card"><strong>${metrics.visitorCount24h || 0}</strong><p>Visitors (24h)</p></article>
+        <article class="metric-card"><strong>${metrics.visitorCount7d || 0}</strong><p>Visitors (7d)</p></article>
+        <article class="metric-card"><strong>${metrics.userCount || 0}</strong><p>Known users</p></article>
+        <article class="metric-card"><strong>${metrics.submissionCount || 0}</strong><p>Submission threads</p></article>
+        <article class="metric-card"><strong>${locationCount}</strong><p>Tracked locations</p></article>
+        <article class="metric-card"><strong>${metrics.approvedEntityCount || 0}</strong><p>Approved entities</p></article>
+        <article class="metric-card"><strong>${metrics.commentCount || 0}</strong><p>Visible comments</p></article>
+        <article class="metric-card"><strong>${metrics.visitEventCount7d || 0}</strong><p>Visit pulses (7d)</p></article>
+      </section>
+      <section class="surface-panel">
+        <div class="eyebrow">Snapshot</div>
+        <h2>Seed bakedown</h2>
+        <p class="muted-text">Request a peer-pinner bakedown of approved entities and public posts into seed files, with an optional GitHub PR when the operator has configured repo access.</p>
+        <div class="button-row">
+          <button class="button" type="button" data-request-snapshot>Request bakedown</button>
+        </div>
+        <div class="status-box">${escapeHtml(workspaceState.dashboardStatus || "No bakedown request sent in this session.")}</div>
+        ${renderSnapshotSummary(snapshot)}
+      </section>
+    </div>
   `;
 }
 
@@ -456,9 +476,11 @@ function renderLogPane() {
   const logEvents = (workspaceState.publicState?.rawEvents || [])
     .filter((event) =>
       [
+        SITE.nostr.kinds.snapshot,
         SITE.nostr.kinds.adminClaim,
         SITE.nostr.kinds.adminRole,
         SITE.nostr.kinds.userMod,
+        SITE.nostr.kinds.snapshotRequest,
         SITE.nostr.kinds.entity,
         SITE.nostr.kinds.draft,
         SITE.nostr.kinds.commentMod,
@@ -1097,6 +1119,36 @@ async function handleSubmissionAction(button) {
   await refreshWorkspace(true);
 }
 
+async function handleSnapshotRequest(button) {
+  if (!currentUserIsAdmin() || !workspaceState.session) return;
+  button.setAttribute("disabled", "disabled");
+  try {
+    const requestId = `snapshot:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    await publishTaggedJson({
+      kind: SITE.nostr.kinds.snapshotRequest,
+      secretKeyHex: workspaceState.session.secretKeyHex,
+      tags: [
+        ["d", requestId],
+        ["req", requestId],
+        ["op", "bake"]
+      ],
+      content: {
+        protocol: `${SITE.nostr.protocolPrefix}-snapshot-request/v1`,
+        request_id: requestId,
+        op: "bake",
+        requested_at: new Date().toISOString()
+      }
+    });
+    workspaceState.dashboardStatus = "Snapshot request published. Peer pinner can now materialize current approved content and update its bakedown branch.";
+    await refreshWorkspace(true);
+  } catch (error) {
+    workspaceState.dashboardStatus = String(error?.message || error || "Snapshot request failed.");
+    renderWorkspace();
+  } finally {
+    button.removeAttribute("disabled");
+  }
+}
+
 async function hydrateChatModal() {
   if (!workspaceState.chatModal || !currentUserHasInboxAccess()) return;
   workspaceState.chatModal.messages = await loadSubmissionThread(
@@ -1322,6 +1374,33 @@ function currentUserHasInboxAccess() {
   );
 }
 
+function renderSnapshotSummary(snapshot) {
+  if (!snapshot) {
+    return `<p class="muted-text">No baked snapshot event is visible yet.</p>`;
+  }
+  const generatedAt = snapshot.generated_at
+    ? new Date(snapshot.generated_at).toLocaleString()
+    : new Date((snapshot.event?.created_at || snapshot.version_ts || 0) * 1000).toLocaleString();
+  const prUrl = snapshot.git?.pr_url || "";
+  const branch = snapshot.git?.branch || "";
+  const commit = snapshot.git?.commit || "";
+  return `
+    <div class="roster-list">
+      <article class="roster-item">
+        <strong>Latest bakedown</strong>
+        <span>${escapeHtml(snapshot.status || "ready")} • ${escapeHtml(generatedAt)}</span>
+        <span>${escapeHtml(`${snapshot.counts?.posts || 0} posts • ${snapshot.counts?.entities || 0} entities`)}</span>
+        ${
+          branch
+            ? `<span class="mono">${escapeHtml(branch)}${commit ? ` @ ${escapeHtml(String(commit).slice(0, 12))}` : ""}</span>`
+            : ""
+        }
+        ${prUrl ? `<a class="text-link" href="${escapeAttribute(prUrl)}" target="_blank" rel="noreferrer">Open PR</a>` : ""}
+      </article>
+    </div>
+  `;
+}
+
 function resolveEntityByNameOrSlug(value) {
   const clean = String(value || "").trim().toLowerCase();
   return (workspaceState.publicState?.approvedEntities || []).find(
@@ -1331,12 +1410,16 @@ function resolveEntityByNameOrSlug(value) {
 
 function logLabel(event) {
   switch (Number(event.kind)) {
+    case SITE.nostr.kinds.snapshot:
+      return "Snapshot bakedown";
     case SITE.nostr.kinds.adminClaim:
       return "Root admin claim";
     case SITE.nostr.kinds.adminRole:
       return "Admin role change";
     case SITE.nostr.kinds.userMod:
       return "User moderation";
+    case SITE.nostr.kinds.snapshotRequest:
+      return "Snapshot request";
     case SITE.nostr.kinds.entity:
       return "Entity update";
     case SITE.nostr.kinds.draft:
@@ -1355,6 +1438,9 @@ function logLabel(event) {
 function logTarget(event) {
   const slug = firstTag(event, "d");
   switch (Number(event.kind)) {
+    case SITE.nostr.kinds.snapshot:
+    case SITE.nostr.kinds.snapshotRequest:
+      return { href: "./admin.html?tab=dashboard", description: slug || shortKey(event.pubkey) };
     case SITE.nostr.kinds.adminClaim:
     case SITE.nostr.kinds.adminRole:
     case SITE.nostr.kinds.userMod:

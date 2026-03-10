@@ -39,12 +39,14 @@ export const SITE = Object.freeze({
       shim: "./vendor/event-tools-shim.js"
     },
     kinds: {
+      snapshot: 34126,
       tip: 4,
       adminClaim: 34127,
       adminRole: 34128,
       userMod: 34129,
       nameClaim: 34130,
       profile: 34131,
+      snapshotRequest: 34132,
       entity: 34133,
       draft: 34134,
       comment: 34135,
