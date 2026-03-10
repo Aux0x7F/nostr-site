@@ -37,7 +37,16 @@ Run the local wizard on the pinner host:
 ```bash
 npm run setup:wizard
 npm run gh:check
+npm run bootstrap:host
 ```
+
+One-line bootstrap for Git Bash / MSYS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner/install.sh | bash
+```
+
+That wrapper downloads and runs [host-bootstrap.ps1](C:/projects/nostr-site/peer-pinner/host-bootstrap.ps1), which is the actual Windows host installer.
 
 Useful non-interactive variants:
 
@@ -46,11 +55,24 @@ node setup-wizard.js --check-only --repo=owner/repo --base-branch=main
 node setup-wizard.js --non-interactive --repo=owner/repo --repo-dir=/path/to/site --root-admin-pubkey=<hex>
 ```
 
-The wizard will:
+The host bootstrap script will:
+
+- install `node`, `gh`, and `git` via `winget` if they are missing
+- ensure GitHub CLI auth is present for PR automation
+- clone or update the `nostr-site` repo
+- run `npm ci` and `npm run build:all`
+- run the setup wizard
+- register a per-user scheduled task that keeps [service-runner.ps1](C:/projects/nostr-site/peer-pinner/service-runner.ps1) alive and restarts it after updates or crashes
+
+The setup wizard will:
 
 - create or reuse a pinner service identity under `peer-pinner/data/`
 - write local runtime config to `peer-pinner/.env.peer-pinner.local`
+- inspect relay state to decide between `new-site`, `site-bootstrap`, and `needs-root-selection`
+- read checked-in defaults from `site-config.js` and `CNAME` when a repo dir is present
 - check GitHub CLI install/auth and repo visibility
+- for a new site, wait for a real user account to appear on relays and ask the operator to approve that witnessed username/pubkey as root admin
+- for an existing site, reuse the root admin already visible on relays when possible
 - generate signed bootstrap events for the pinner account record
 - optionally generate a site inbox key and wrap it to the root admin pubkey
 - write bootstrap artifacts to `peer-pinner/setup-output/`
@@ -64,6 +86,8 @@ npm start
 ```
 
 `peer-pinner.js` automatically loads `peer-pinner/.env.peer-pinner.local` if it exists, so the wizard output is picked up without additional wrapper scripts.
+
+For the Windows host flow, the scheduled task launches `service-runner.ps1`, which loops `dist/peer-pinner.js`, logs to `peer-pinner/data/service-logs/`, and restarts after exit.
 
 ## Useful environment variables
 
@@ -90,6 +114,12 @@ npm start
 - `GITHUB_BRANCH_PREFIX`
 - `ROOT_ADMIN_PUBKEY`
 - `PROTOCOL_PREFIX`
+
+## Bootstrap modes
+
+- `new-site`: no meaningful relay noise for this app tag yet. The wizard waits for a freshly created account, then asks the operator to approve it as the root admin witness.
+- `site-bootstrap`: relay state already exists and a root admin can be inferred. The wizard uses that identity and can generate or rotate the site inbox key.
+- `bootstrap-needs-root-selection`: relay state exists, but no canonical root admin was inferred. The operator must choose one.
 
 ## GitHub auth
 

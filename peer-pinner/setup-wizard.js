@@ -11,6 +11,7 @@ const {
   loadOrCreatePeerPinnerIdentity,
   normalizeProtocolPrefix,
 } = require("./identity");
+const { detectRelaySiteState } = require("./relay-state");
 
 const DEFAULTS = {
   appTag: String(process.env.APP_TAG || "nostr-site-template").trim() || "nostr-site-template",
@@ -32,6 +33,8 @@ const DEFAULTS = {
   rootAdminPubkey: String(process.env.ROOT_ADMIN_PUBKEY || "").trim().toLowerCase(),
   relays: parseRelays(process.env.UPSTREAM_RELAYS || ""),
   clientName: "nostr-site-peer-pinner",
+  relayScanLimit: 500,
+  recentUserWindowSeconds: 1800,
   kinds: {
     adminKeyShare: 34138,
     nameClaim: 34130,
@@ -48,8 +51,8 @@ void main().catch((error) => {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const config = {
-    appTag: args.appTag || DEFAULTS.appTag,
-    protocolPrefix: normalizeProtocolPrefix(args.protocolPrefix || DEFAULTS.protocolPrefix),
+    appTag: DEFAULTS.appTag,
+    protocolPrefix: DEFAULTS.protocolPrefix,
     alias: args.alias || DEFAULTS.alias,
     pinnerName: args.pinnerName || DEFAULTS.pinnerName,
     pinnerDescription: args.pinnerDescription || DEFAULTS.pinnerDescription,
@@ -60,20 +63,55 @@ async function main() {
     repoDir: String(args.repoDir || DEFAULTS.repoDir || "").trim(),
     repo: String(args.repo || DEFAULTS.repo || "").trim(),
     baseBranch: String(args.baseBranch || DEFAULTS.baseBranch || "main").trim() || "main",
-    rootAdminPubkey: String(args.rootAdminPubkey || DEFAULTS.rootAdminPubkey || "").trim().toLowerCase(),
+    rootAdminPubkey: "",
     relays: parseRelays(args.relays || DEFAULTS.relays.join(",")),
     checkOnly: Boolean(args.checkOnly),
     nonInteractive: Boolean(args.nonInteractive),
     publishBootstrap: Boolean(args.publishBootstrap),
     skipSiteKey: Boolean(args.skipSiteKey),
+    mode: String(args.mode || "auto").trim().toLowerCase() || "auto",
+    siteDomain: "",
   };
+  const repoDefaults = readRepoBootstrapDefaults(config.repoDir);
+  config.appTag = String(args.appTag || repoDefaults.siteConfig.appTag || DEFAULTS.appTag).trim() || DEFAULTS.appTag;
+  config.protocolPrefix = normalizeProtocolPrefix(
+    args.protocolPrefix || repoDefaults.siteConfig.protocolPrefix || DEFAULTS.protocolPrefix
+  );
+  config.rootAdminPubkey = String(
+    args.rootAdminPubkey || repoDefaults.siteConfig.rootAdminPubkey || DEFAULTS.rootAdminPubkey || ""
+  ).trim().toLowerCase();
+  config.siteDomain = String(args.siteDomain || repoDefaults.siteDomain || "").trim().toLowerCase();
 
   if (config.rootAdminPubkey && !isHex64(config.rootAdminPubkey)) {
     throw new Error("ROOT_ADMIN_PUBKEY must be a 64-character hex pubkey.");
   }
 
+  const relayState = await detectRelaySiteState({
+    relays: config.relays,
+    appTag: config.appTag,
+    limit: DEFAULTS.relayScanLimit,
+    recentUserWindowSeconds: DEFAULTS.recentUserWindowSeconds,
+  }).catch(() => ({
+    totalEvents: 0,
+    hasNoise: false,
+    countsByKind: {},
+    rootAdminPubkey: "",
+    admins: [],
+    users: [],
+    recentUsers: [],
+    modeSuggestion: "new-site",
+    relays: config.relays,
+  }));
+  if (!config.rootAdminPubkey && relayState.rootAdminPubkey) {
+    config.rootAdminPubkey = relayState.rootAdminPubkey;
+  }
+  const bootstrapMode = resolveBootstrapMode(config, relayState);
+
   if (!config.checkOnly && !config.nonInteractive && input.isTTY && output.isTTY) {
-    await promptForMissingValues(config);
+    await promptForMissingValues(config, relayState, bootstrapMode, repoDefaults);
+  }
+  if (config.rootAdminPubkey && !isHex64(config.rootAdminPubkey)) {
+    throw new Error("Root admin pubkey must be 64 hex characters.");
   }
 
   const github = runGithubChecks({
@@ -82,8 +120,15 @@ async function main() {
   });
 
   if (config.checkOnly) {
-    printCheckSummary(config, github);
+    printCheckSummary(config, github, relayState, repoDefaults, bootstrapMode);
     return;
+  }
+
+  if (!config.rootAdminPubkey) {
+    if (config.nonInteractive) {
+      throw new Error("No root admin pubkey is known yet. Rerun without --non-interactive or pass --root-admin-pubkey.");
+    }
+    config.rootAdminPubkey = await witnessRootAdmin(config, relayState, repoDefaults);
   }
 
   const serviceIdentity = loadOrCreatePeerPinnerIdentity(config.identityFile, config.alias);
@@ -119,6 +164,7 @@ async function main() {
       pubkey: serviceIdentity.pubkey,
       identity_file: config.identityFile,
     },
+    site_domain: config.siteDomain,
     root_admin_pubkey: config.rootAdminPubkey,
     site_inbox_pubkey: siteIdentity?.pubkey || "",
     events: bootstrapEvents,
@@ -151,6 +197,7 @@ async function main() {
       rootAdminPubkey: config.rootAdminPubkey,
       inboxPubkey: siteIdentity?.pubkey || "",
     },
+    siteDomain: config.siteDomain || "",
   };
   const siteConfigFile = path.join(outputDir, "site-config-snippet.json");
   writeJsonFile(siteConfigFile, siteConfigSnippet);
@@ -163,20 +210,24 @@ async function main() {
       identity_file: config.identityFile,
     },
     site_inbox_pubkey: siteIdentity?.pubkey || "",
+    site_domain: config.siteDomain,
     root_admin_pubkey: config.rootAdminPubkey,
     env_file: config.envFile,
     bootstrap_file: bootstrapFile,
     site_config_file: siteConfigFile,
+    relay_state: relayState,
+    bootstrap_mode: bootstrapMode,
+    repo_defaults: repoDefaults,
     github,
     publish_result: publishResult,
-    notes: buildWizardNotes(config, github, publishResult),
+    notes: buildWizardNotes(config, github, publishResult, relayState, bootstrapMode),
   };
   const summaryFile = path.join(outputDir, "wizard-summary.json");
   writeJsonFile(summaryFile, summary);
   printSetupSummary(summary);
 }
 
-async function promptForMissingValues(config) {
+async function promptForMissingValues(config, relayState, bootstrapMode, repoDefaults) {
   const rl = readline.createInterface({ input, output });
   try {
     config.alias = await promptValue(
@@ -193,7 +244,17 @@ async function promptForMissingValues(config) {
     config.repoDir = await promptValue(rl, "Snapshot repo dir", config.repoDir);
     config.repo = await promptValue(rl, "GitHub repo (owner/repo)", config.repo);
     config.baseBranch = await promptValue(rl, "GitHub base branch", config.baseBranch);
+    config.siteDomain = await promptValue(rl, "Site domain", config.siteDomain || repoDefaults.siteDomain || "");
+    if (!config.rootAdminPubkey && relayState.rootAdminPubkey) {
+      console.log(`Observed root admin from relay state: ${relayState.rootAdminPubkey}`);
+      config.rootAdminPubkey = relayState.rootAdminPubkey;
+    } else if (!config.rootAdminPubkey && bootstrapMode !== "new-site") {
+      config.rootAdminPubkey = String(await promptValue(rl, "Root admin pubkey", config.rootAdminPubkey)).trim().toLowerCase();
+    }
     config.publishBootstrap = await promptYesNo(rl, "Publish bootstrap events to relays now", config.publishBootstrap);
+    if (bootstrapMode === "new-site" && !config.rootAdminPubkey) {
+      console.log("No root admin pubkey is known yet. The wizard will watch relays for a freshly created account next.");
+    }
     if (config.rootAdminPubkey) {
       config.skipSiteKey = !(await promptYesNo(rl, "Generate and wrap a site inbox key for the root admin", !config.skipSiteKey));
     }
@@ -371,12 +432,13 @@ async function promptYesNo(rl, label, defaultValue) {
   return ["y", "yes"].includes(answer);
 }
 
-function buildWizardNotes(config, github, publishResult) {
+function buildWizardNotes(config, github, publishResult, relayState, bootstrapMode) {
   const notes = [
     "The pinner service key is stored locally because it signs blob fulfillments, bakedowns, and PR receipts.",
     "The shared site inbox key is wrapped to the configured root admin pubkey and is not written to the pinner env file.",
     "PR automation should stay branch-and-PR only. Direct write access to the live deploy branch makes the pinner effectively root-equivalent.",
   ];
+  notes.push(`Bootstrap mode: ${bootstrapMode}. Relay state currently shows ${relayState.totalEvents || 0} tagged events.`);
   if (!github.authenticated) {
     notes.push("GitHub CLI auth is not currently ready. PR sync will require `gh auth login` or a GITHUB_TOKEN in the pinner environment.");
   }
@@ -386,10 +448,14 @@ function buildWizardNotes(config, github, publishResult) {
   return notes;
 }
 
-function printCheckSummary(config, github) {
+function printCheckSummary(config, github, relayState, repoDefaults, bootstrapMode) {
   console.log("Peer pinner GitHub check");
   console.log(`- app tag: ${config.appTag}`);
   console.log(`- protocol prefix: ${config.protocolPrefix}`);
+  console.log(`- bootstrap mode: ${bootstrapMode}`);
+  console.log(`- relay noise: ${relayState.totalEvents || 0} tagged events`);
+  if (relayState.rootAdminPubkey) console.log(`- relay root admin: ${relayState.rootAdminPubkey}`);
+  if (repoDefaults.siteDomain) console.log(`- repo CNAME/domain: ${repoDefaults.siteDomain}`);
   console.log(`- gh installed: ${github.installed ? "yes" : "no"}`);
   console.log(`- gh authenticated: ${github.authenticated ? "yes" : "no"}`);
   if (github.version) console.log(`- gh version: ${github.version}`);
@@ -408,6 +474,7 @@ function printCheckSummary(config, github) {
 
 function printSetupSummary(summary) {
   console.log("Peer pinner setup complete");
+  console.log(`- bootstrap mode: ${summary.bootstrap_mode}`);
   console.log(`- service alias: ${summary.service_identity.alias}`);
   console.log(`- service pubkey: ${summary.service_identity.pubkey}`);
   console.log(`- identity file: ${summary.service_identity.identity_file}`);
@@ -416,6 +483,9 @@ function printSetupSummary(summary) {
   console.log(`- site config snippet: ${summary.site_config_file}`);
   if (summary.site_inbox_pubkey) {
     console.log(`- site inbox pubkey: ${summary.site_inbox_pubkey}`);
+  }
+  if (summary.site_domain) {
+    console.log(`- site domain: ${summary.site_domain}`);
   }
   if (summary.publish_result) {
     console.log(`- bootstrap publish: ${summary.publish_result.ok ? "ok" : "partial/failed"}`);
@@ -495,6 +565,97 @@ function firstLine(value) {
 
 function toCamel(value) {
   return String(value || "").replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+function resolveBootstrapMode(config, relayState) {
+  const requested = String(config.mode || "auto").trim().toLowerCase();
+  if (requested && requested !== "auto") return requested;
+  if (config.rootAdminPubkey || relayState?.rootAdminPubkey) return "site-bootstrap";
+  if (!relayState?.hasNoise) return "new-site";
+  return "bootstrap-needs-root-selection";
+}
+
+async function witnessRootAdmin(config, relayState, repoDefaults) {
+  const rl = readline.createInterface({ input, output });
+  try {
+    let currentState = relayState;
+    console.log("Root admin bootstrap");
+    console.log(`- app tag: ${config.appTag}`);
+    if (config.siteDomain || repoDefaults.siteDomain) {
+      console.log(`- site domain: ${config.siteDomain || repoDefaults.siteDomain}`);
+    }
+    console.log("Have the intended root admin sign in on the site and save their profile, then press Enter to scan relays.");
+    while (true) {
+      await rl.question("Press Enter to scan for fresh account activity: ");
+      currentState = await detectRelaySiteState({
+        relays: config.relays,
+        appTag: config.appTag,
+        limit: DEFAULTS.relayScanLimit,
+        recentUserWindowSeconds: DEFAULTS.recentUserWindowSeconds,
+      });
+      const candidates = currentState.recentUsers.length ? currentState.recentUsers : currentState.users.filter((user) => !user.service);
+      if (!candidates.length) {
+        console.log("No account claims were observed yet.");
+        continue;
+      }
+      console.log("Observed account candidates:");
+      for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index];
+        console.log(`  ${index + 1}. ${candidate.displayName} @${candidate.username || "unnamed"} ${candidate.pubkey}`);
+      }
+      const answer = String(
+        await rl.question("Approve a candidate number, paste a pubkey, or enter `r` to rescan: ")
+      ).trim().toLowerCase();
+      if (!answer || answer === "r" || answer === "rescan") continue;
+      if (isHex64(answer)) return answer;
+      const index = Number(answer);
+      if (Number.isInteger(index) && index > 0 && index <= candidates.length) {
+        const chosen = candidates[index - 1];
+        const confirm = await promptYesNo(
+          rl,
+          `Approve ${chosen.displayName} @${chosen.username || "unnamed"} as root admin`,
+          true
+        );
+        if (confirm) return chosen.pubkey;
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+function readRepoBootstrapDefaults(repoDir) {
+  const root = path.resolve(String(repoDir || "").trim() || ".");
+  if (!repoDir || !fs.existsSync(root)) {
+    return {
+      repoDir: "",
+      siteDomain: "",
+      siteConfig: {
+        appTag: "",
+        protocolPrefix: "",
+        rootAdminPubkey: "",
+        inboxPubkey: "",
+      },
+    };
+  }
+  const siteConfigPath = path.join(root, "site-config.js");
+  const cnamePath = path.join(root, "CNAME");
+  const siteConfigRaw = fs.existsSync(siteConfigPath) ? String(fs.readFileSync(siteConfigPath, "utf8") || "") : "";
+  return {
+    repoDir: root,
+    siteDomain: fs.existsSync(cnamePath) ? String(fs.readFileSync(cnamePath, "utf8") || "").trim().toLowerCase() : "",
+    siteConfig: {
+      appTag: extractQuotedValue(siteConfigRaw, "appTag"),
+      protocolPrefix: extractQuotedValue(siteConfigRaw, "protocolPrefix"),
+      rootAdminPubkey: extractQuotedValue(siteConfigRaw, "rootAdminPubkey"),
+      inboxPubkey: extractQuotedValue(siteConfigRaw, "inboxPubkey"),
+    },
+  };
+}
+
+function extractQuotedValue(source, key) {
+  const match = new RegExp(`${key}\\s*:\\s*["']([^"']*)["']`).exec(String(source || ""));
+  return match ? String(match[1] || "").trim() : "";
 }
 
 async function loadEventTools() {

@@ -125,7 +125,13 @@ npm run build
 npm run setup:wizard
 ```
 
-The wizard writes local pinner config, checks GitHub auth, and can generate a wrapped site inbox bootstrap package for the configured root admin.
+For Windows hosts, there is also a single-entry bootstrap path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner/install.sh | bash
+```
+
+That host bootstrap can install missing dependencies, update the repo, run the wizard, and register the pinner as a restartable scheduled task.
 
 ## Support library package
 
