@@ -639,7 +639,7 @@ function readRepoBootstrapDefaults(repoDir) {
       },
     };
   }
-  const siteConfigPath = path.join(root, "site-config.js");
+  const siteConfigPath = resolveSiteConfigPath(root);
   const cnamePath = path.join(root, "CNAME");
   const siteConfigRaw = fs.existsSync(siteConfigPath) ? String(fs.readFileSync(siteConfigPath, "utf8") || "") : "";
   return {
@@ -652,6 +652,17 @@ function readRepoBootstrapDefaults(repoDir) {
       inboxPubkey: extractQuotedValue(siteConfigRaw, "inboxPubkey"),
     },
   };
+}
+
+function resolveSiteConfigPath(root) {
+  const candidates = [
+    path.join(root, "scripts", "core", "site-config.js"),
+    path.join(root, "site-config.js"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
 }
 
 function extractQuotedValue(source, key) {

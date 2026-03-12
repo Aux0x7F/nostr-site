@@ -5,7 +5,7 @@ import {
   normalizeUsername,
   publishTaggedJson
 } from "./nostr.js";
-import { createDeterministicSessionApi } from "./portable/deterministic-session.js";
+import { createDeterministicSessionApi } from "../../portable/deterministic-session.js";
 
 const sessionApi = createDeterministicSessionApi(SITE, {
   deriveIdentity,

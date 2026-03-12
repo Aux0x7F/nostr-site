@@ -1,5 +1,5 @@
-import SITE from "../site-config.js";
-import { createUniqueSlug, splitTags } from "../content-utils.js";
+import SITE from "../core/site-config.js";
+import { createUniqueSlug, splitTags } from "../core/content-utils.js";
 import {
   cleanSlug,
   deriveIdentity,
@@ -12,8 +12,8 @@ import {
   publishSubmission,
   publishSubmissionChat,
   resolveSitePubkey
-} from "../nostr.js";
-import { getStoredSession } from "../session.js";
+} from "../core/nostr.js";
+import { getStoredSession } from "../core/session.js";
 
 const submitState = {
   session: getStoredSession(),

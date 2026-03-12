@@ -21,6 +21,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - `blog.html` and `post.html`: generic blog index and detail pages
 - `content/blog/`: committed blog markdown and index manifest
 - `content/data/entities.json`: committed baked entity seed data
+- `scripts/`: browser entrypoints and template implementation
+- `scripts/core/`: site config, session, content, and Nostr helpers
 - `portable/`: source-of-truth reusable Nostr/CMS logic
 - `support-lib/`: minified reusable browser package built from `portable/`
 - `peer-pinner/`: self-hosted relay mirror / fulfillment gate package
@@ -90,7 +92,7 @@ The intended trust split is:
 
 ## Storage caveats
 
-- Clients upload blobs to the configured cache host in `site-config.js`.
+- Clients upload blobs to the configured cache host in `scripts/core/site-config.js`.
 - Clear avatars upload as public blobs.
 - Submission attachments upload as ciphertext, encrypted client-side to the site inbox key.
 - Blob refs are published in relay-visible metadata so peer pinners can retain them without decrypting private submissions.
@@ -136,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner
 
 Linux is now the primary target for that one-liner. It installs missing dependencies, updates the runtime repo, runs the wizard, and registers the pinner as a restartable `systemd` service. On Windows shells it falls back to the PowerShell host bootstrap path.
 
-For actual deployments, the runtime repo can stay `nostr-site` while the pinner targets a separate site repo for `site-config.js`, `CNAME`, and baked content snapshots.
+For actual deployments, the runtime repo can stay `nostr-site` while the pinner targets a separate site repo for `scripts/core/site-config.js`, `CNAME`, and baked content snapshots.
 
 ## Support library package
 

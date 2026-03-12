@@ -60,7 +60,7 @@ bash host-bootstrap.sh --site-repo=owner/site-repo --site-repo-dir=/srv/site --n
 For a real campaign/site deployment, `--site-repo` and `--site-repo-dir` are the important knobs:
 
 - the runtime repo can stay `Aux0x7F/nostr-site`
-- the site repo is the actual campaign repo whose `site-config.js`, `CNAME`, and baked seed files the pinner should target
+- the site repo is the actual campaign repo whose `scripts/core/site-config.js`, `CNAME`, and baked seed files the pinner should target
 
 The Linux host bootstrap script will:
 
@@ -87,7 +87,7 @@ The setup wizard will:
 - create or reuse a pinner service identity under `peer-pinner/data/`
 - write local runtime config to `peer-pinner/.env.peer-pinner.local`
 - inspect relay state to decide between `new-site`, `site-bootstrap`, and `needs-root-selection`
-- read checked-in defaults from `site-config.js` and `CNAME` when a repo dir is present
+- read checked-in defaults from `scripts/core/site-config.js` and `CNAME` when a repo dir is present
 - check GitHub CLI install/auth and repo visibility
 - for a new site, wait for a real user account to appear on relays and ask the operator to approve that witnessed username/pubkey as root admin
 - for an existing site, reuse the root admin already visible on relays when possible

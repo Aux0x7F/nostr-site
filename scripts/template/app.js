@@ -1,10 +1,10 @@
-import SITE from "../site-config.js";
+import SITE from "../core/site-config.js";
 import {
   collectEntityRefsFromText,
   enrichEntityReferences,
   parseContentDocument,
   slugify
-} from "../content-utils.js";
+} from "../core/content-utils.js";
 import {
   cleanSlug,
   deriveIdentity,
@@ -12,8 +12,8 @@ import {
   ensureBlobAvailable,
   loadPublicState,
   publishTaggedJson
-} from "../nostr.js";
-import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../session.js";
+} from "../core/nostr.js";
+import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 
 const NAV_KEYS = {
   home: ["home"],

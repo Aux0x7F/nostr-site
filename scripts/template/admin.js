@@ -1,5 +1,5 @@
-import SITE from "../site-config.js";
-import { buildDraftMarkdown, createUniqueSlug, splitTags } from "../content-utils.js";
+import SITE from "../core/site-config.js";
+import { buildDraftMarkdown, createUniqueSlug, splitTags } from "../core/content-utils.js";
 import {
   cleanSlug,
   decryptUploadedBlob,
@@ -18,8 +18,8 @@ import {
   resolveSitePubkey,
   shortKey,
   uploadPublicBlob
-} from "../nostr.js";
-import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../session.js";
+} from "../core/nostr.js";
+import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
 
 const workspaceState = {
   session: getStoredSession(),

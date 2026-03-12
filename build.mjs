@@ -29,11 +29,11 @@ const htmlFiles = [
 
 for (const entry of ["app.js", "admin.js", "submit.js"]) {
   await esbuild.build({
-    entryPoints: [path.join(root, entry)],
+    entryPoints: [path.join(root, "scripts", entry)],
     bundle: true,
     format: "esm",
     minify: true,
-    outfile: path.join(dist, entry)
+    outfile: path.join(dist, "scripts", entry)
   });
 }
 

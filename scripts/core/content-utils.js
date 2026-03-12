@@ -4,12 +4,12 @@ export {
   splitTags,
   slugify,
   createUniqueSlug
-} from "./portable/content-docs.js";
+} from "../../portable/content-docs.js";
 
 import {
   parseContentDocument as parseGenericContentDocument,
   buildDraftMarkdown as buildGenericDraftMarkdown
-} from "./portable/content-docs.js";
+} from "../../portable/content-docs.js";
 
 const MARKERS = ["CMSMETA"];
 
