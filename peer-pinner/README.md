@@ -66,6 +66,16 @@ bash host-bootstrap.sh --site-repo=owner/site-repo --site-repo-dir=/srv/site --n
 
 Site-specific runtime details can also be passed through the wizard/bootstrap now, including `--host`, `--port`, `--blob-cache-base-url`, `--snapshot-blog-dir`, `--snapshot-blog-index`, `--snapshot-entities-path`, and `--snapshot-marker`.
 
+For existing sites with a checked-in `scripts/core/site-config.js`, the wizard also reuses repo defaults automatically:
+
+- `nostr.appTag`
+- `nostr.protocolPrefix`
+- `nostr.rootAdminPubkey`
+- `nostr.inboxPubkey`
+- `nostr.relays`
+- `blobs.baseUrl`
+- `CNAME`
+
 For a real campaign/site deployment, `--site-repo` and `--site-repo-dir` are the important knobs:
 
 - the runtime repo can stay `Aux0x7F/nostr-site`
@@ -102,12 +112,14 @@ The setup wizard will:
 - read checked-in defaults from `scripts/core/site-config.js` and `CNAME` when a repo dir is present
 - check GitHub CLI install/auth and repo visibility
 - for a new site, wait for a real user account to appear on relays and ask the operator to approve that witnessed username/pubkey as root admin
-- for an existing site, reuse the root admin already visible on relays when possible
+- for an existing site, reuse the checked-in or relay-visible root admin when possible
 - generate signed bootstrap events for the pinner account record
-- optionally generate a site inbox key and wrap it to the root admin pubkey
+- preserve the checked-in site inbox key by default, or generate and wrap a replacement only when explicitly rotating it
 - write bootstrap artifacts to `peer-pinner/setup-output/`
 
 By default the bootstrap events are only written to disk. If you want the pinner to publish them to relays immediately, run the wizard with `--publish-bootstrap`.
+
+If you intentionally want to rotate the site inbox key during bootstrap, pass `--rotate-site-key`. Otherwise an existing `inboxPubkey` in site config is treated as authoritative and is left alone.
 
 ## Start
 
@@ -150,7 +162,7 @@ For Windows, the scheduled task launches `service-runner.ps1`, which loops `dist
 ## Bootstrap modes
 
 - `new-site`: no meaningful relay noise for this app tag yet. The wizard waits for a freshly created account, then asks the operator to approve it as the root admin witness.
-- `site-bootstrap`: relay state already exists and a root admin can be inferred. The wizard uses that identity and can generate or rotate the site inbox key.
+- `site-bootstrap`: relay state or checked-in config already exists and a root admin can be inferred. The wizard uses that identity and reuses the checked-in inbox key unless `--rotate-site-key` is requested.
 - `bootstrap-needs-root-selection`: relay state exists, but no canonical root admin was inferred. The operator must choose one.
 
 ## GitHub auth

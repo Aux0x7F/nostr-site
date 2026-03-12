@@ -39,7 +39,7 @@ const DEFAULTS = {
   snapshotBlogIndex: String(process.env.SNAPSHOT_BLOG_INDEX || "").trim(),
   snapshotEntitiesPath: String(process.env.SNAPSHOT_ENTITIES_PATH || "").trim(),
   snapshotMarker: String(process.env.SNAPSHOT_MARKER || "").trim(),
-  relays: parseRelays(process.env.UPSTREAM_RELAYS || ""),
+  relays: parseRelays(process.env.UPSTREAM_RELAYS || "wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol"),
   clientName: "nostr-site-peer-pinner",
   relayScanLimit: 500,
   recentUserWindowSeconds: 1800,
@@ -86,6 +86,7 @@ async function main() {
     nonInteractive: Boolean(args.nonInteractive),
     publishBootstrap: Boolean(args.publishBootstrap),
     skipSiteKey: Boolean(args.skipSiteKey),
+    rotateSiteKey: Boolean(args.rotateSiteKey),
     mode: String(args.mode || "auto").trim().toLowerCase() || "auto",
     siteDomain: "",
   };
@@ -97,6 +98,12 @@ async function main() {
   config.rootAdminPubkey = String(
     args.rootAdminPubkey || repoDefaults.siteConfig.rootAdminPubkey || DEFAULTS.rootAdminPubkey || ""
   ).trim().toLowerCase();
+  config.blobCacheBaseUrl = String(
+    args.blobCacheBaseUrl || repoDefaults.blobCacheBaseUrl || DEFAULTS.blobCacheBaseUrl || ""
+  ).trim();
+  config.relays = parseRelays(
+    args.relays || repoDefaults.siteConfig.relays.join(",") || DEFAULTS.relays.join(",")
+  );
   config.siteDomain = String(args.siteDomain || repoDefaults.siteDomain || "").trim().toLowerCase();
 
   if (config.rootAdminPubkey && !isHex64(config.rootAdminPubkey)) {
@@ -154,8 +161,10 @@ async function main() {
   const serviceIdentity = loadOrCreatePeerPinnerIdentity(config.identityFile, config.alias);
   const outputDir = ensureDir(config.outputDir);
   const generatedAt = new Date().toISOString();
+  const existingInboxPubkey = isHex64(repoDefaults.siteConfig.inboxPubkey) ? repoDefaults.siteConfig.inboxPubkey : "";
+  const shouldGenerateSiteKey = !config.skipSiteKey && config.rootAdminPubkey && (!existingInboxPubkey || config.rotateSiteKey);
   let siteIdentity = null;
-  if (!config.skipSiteKey && config.rootAdminPubkey) {
+  if (shouldGenerateSiteKey) {
     const secretKeyHex = generateSecretKeyHex();
     siteIdentity = {
       secret_key_hex: secretKeyHex,
@@ -216,6 +225,7 @@ async function main() {
     GITHUB_BASE_BRANCH: config.baseBranch,
     GITHUB_BRANCH_PREFIX: config.branchPrefix,
     GIT_REMOTE: config.gitRemote,
+    UPSTREAM_RELAYS: config.relays.join(","),
   };
   writeEnvFile(config.envFile, envValues);
 
@@ -224,7 +234,7 @@ async function main() {
       appTag: config.appTag,
       protocolPrefix: config.protocolPrefix,
       rootAdminPubkey: config.rootAdminPubkey,
-      inboxPubkey: siteIdentity?.pubkey || "",
+      inboxPubkey: siteIdentity?.pubkey || existingInboxPubkey || "",
     },
     siteDomain: config.siteDomain || "",
   };
@@ -238,7 +248,7 @@ async function main() {
       pubkey: serviceIdentity.pubkey,
       identity_file: config.identityFile,
     },
-    site_inbox_pubkey: siteIdentity?.pubkey || "",
+    site_inbox_pubkey: siteIdentity?.pubkey || existingInboxPubkey || "",
     site_domain: config.siteDomain,
     root_admin_pubkey: config.rootAdminPubkey,
     env_file: config.envFile,
@@ -249,7 +259,7 @@ async function main() {
     repo_defaults: repoDefaults,
     github,
     publish_result: publishResult,
-    notes: buildWizardNotes(config, github, publishResult, relayState, bootstrapMode),
+    notes: buildWizardNotes(config, github, publishResult, relayState, bootstrapMode, existingInboxPubkey, Boolean(siteIdentity)),
   };
   const summaryFile = path.join(outputDir, "wizard-summary.json");
   writeJsonFile(summaryFile, summary);
@@ -286,7 +296,17 @@ async function promptForMissingValues(config, relayState, bootstrapMode, repoDef
       console.log("No root admin pubkey is known yet. The wizard will watch relays for a freshly created account next.");
     }
     if (config.rootAdminPubkey) {
-      config.skipSiteKey = !(await promptYesNo(rl, "Generate and wrap a site inbox key for the root admin", !config.skipSiteKey));
+      const hasExistingInbox = isHex64(repoDefaults.siteConfig.inboxPubkey);
+      if (hasExistingInbox) {
+        config.rotateSiteKey = await promptYesNo(
+          rl,
+          "Rotate the existing site inbox key and wrap a replacement to the root admin",
+          false
+        );
+        config.skipSiteKey = !config.rotateSiteKey;
+      } else {
+        config.skipSiteKey = !(await promptYesNo(rl, "Generate and wrap a site inbox key for the root admin", !config.skipSiteKey));
+      }
     }
   } finally {
     rl.close();
@@ -441,7 +461,7 @@ function parseArgs(argv) {
     const rawKey = eqIndex >= 0 ? value.slice(2, eqIndex) : value.slice(2);
     const inlineValue = eqIndex >= 0 ? value.slice(eqIndex + 1) : null;
     const key = rawKey;
-    if (["check-only", "non-interactive", "publish-bootstrap", "skip-site-key"].includes(key)) {
+    if (["check-only", "non-interactive", "publish-bootstrap", "skip-site-key", "rotate-site-key"].includes(key)) {
       out[toCamel(key)] = true;
       continue;
     }
@@ -473,17 +493,22 @@ async function promptYesNo(rl, label, defaultValue) {
   return ["y", "yes"].includes(answer);
 }
 
-function buildWizardNotes(config, github, publishResult, relayState, bootstrapMode) {
+function buildWizardNotes(config, github, publishResult, relayState, bootstrapMode, existingInboxPubkey, generatedSiteKey) {
   const notes = [
     "The pinner service key is stored locally because it signs blob fulfillments, bakedowns, and PR receipts.",
     "The shared site inbox key is wrapped to the configured root admin pubkey and is not written to the pinner env file.",
     "PR automation should stay branch-and-PR only. Direct write access to the live deploy branch makes the pinner effectively root-equivalent.",
   ];
   notes.push(`Bootstrap mode: ${bootstrapMode}. Relay state currently shows ${relayState.totalEvents || 0} tagged events.`);
+  if (generatedSiteKey) {
+    notes.push("A fresh site inbox key was generated for this run. Update the site config and publish the wrapped key-share event before expecting the UI to use it.");
+  } else if (existingInboxPubkey) {
+    notes.push(`Existing site inbox pubkey ${existingInboxPubkey} was preserved. Pass --rotate-site-key to intentionally replace it.`);
+  }
   if (!github.authenticated) {
     notes.push("GitHub CLI auth is not currently ready. PR sync will require `gh auth login` or a GITHUB_TOKEN in the pinner environment.");
   }
-  if (config.rootAdminPubkey && !publishResult?.ok) {
+  if (generatedSiteKey && config.rootAdminPubkey && !publishResult?.ok) {
     notes.push("The encrypted site-key share is written to bootstrap-events.json. Publish that event to relays before expecting admins to load the inbox key through the site UI.");
   }
   return notes;
@@ -700,11 +725,13 @@ function readRepoBootstrapDefaults(repoDir) {
   return {
     repoDir: root,
     siteDomain: fs.existsSync(cnamePath) ? String(fs.readFileSync(cnamePath, "utf8") || "").trim().toLowerCase() : "",
+    blobCacheBaseUrl: extractQuotedValue(siteConfigRaw, "baseUrl"),
     siteConfig: {
       appTag: extractQuotedValue(siteConfigRaw, "appTag"),
       protocolPrefix: extractQuotedValue(siteConfigRaw, "protocolPrefix"),
       rootAdminPubkey: extractQuotedValue(siteConfigRaw, "rootAdminPubkey"),
       inboxPubkey: extractQuotedValue(siteConfigRaw, "inboxPubkey"),
+      relays: extractArrayValues(siteConfigRaw, "relays"),
     },
   };
 }
@@ -723,6 +750,19 @@ function resolveSiteConfigPath(root) {
 function extractQuotedValue(source, key) {
   const match = new RegExp(`${key}\\s*:\\s*["']([^"']*)["']`).exec(String(source || ""));
   return match ? String(match[1] || "").trim() : "";
+}
+
+function extractArrayValues(source, key) {
+  const match = new RegExp(`${key}\\s*:\\s*\\[([\\s\\S]*?)\\]`).exec(String(source || ""));
+  if (!match) return [];
+  const values = [];
+  const pattern = /["']([^"']+)["']/g;
+  let next = pattern.exec(match[1]);
+  while (next) {
+    values.push(String(next[1] || "").trim());
+    next = pattern.exec(match[1]);
+  }
+  return values.filter(Boolean);
 }
 
 async function loadEventTools() {
