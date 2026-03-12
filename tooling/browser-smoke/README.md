@@ -32,3 +32,5 @@ The suite is intended for a live deployed site. It exercises:
 - admin approval and chat reply
 - submitter chat/status visibility
 - comment publish and admin hide moderation
+- temporary admin grant, revoke, and site-key rotation visibility
+- post-revoke submitter behavior and fresh submission intake

@@ -7,6 +7,7 @@ const submitterPass = requiredEnv("SMOKE_USER_PASSWORD");
 const runId = `${Date.now()}`;
 const entityName = `Smoke Entity ${runId}`;
 const subjectLine = `Smoke Submission ${runId}`;
+const followUpSubjectLine = `Smoke Submission After Revoke ${runId}`;
 const commentText = `Smoke comment ${runId}`;
 
 test("anonymous users see login gates", async ({ page }) => {
@@ -19,6 +20,7 @@ test("anonymous users see login gates", async ({ page }) => {
 });
 
 test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
+  test.setTimeout(180000);
   const adminPage = await browser.newPage({ baseURL });
   await login(adminPage, adminUser, adminPass);
   await adminPage.goto("/admin.html?tab=entities");
@@ -81,6 +83,55 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await expect(updatedCommentCard).toContainText("hidden");
   await expect(updatedCommentCard.getByRole("button", { name: "Restore" })).toBeVisible();
   await adminCommentPage.close();
+
+  const adminUsersPage = await browser.newPage({ baseURL });
+  await login(adminUsersPage, adminUser, adminPass);
+  await adminUsersPage.goto("/admin.html?tab=users");
+  await ensureAdminState(adminUsersPage, submitterUser, true);
+  await adminUsersPage.close();
+
+  const temporaryAdminPage = await browser.newPage({ baseURL });
+  await login(temporaryAdminPage, submitterUser, submitterPass);
+  await temporaryAdminPage.goto("/admin.html?tab=dashboard");
+  await expect(temporaryAdminPage.locator("[data-workspace-title]")).toContainText("Workspace");
+  await expect(temporaryAdminPage.getByRole("button", { name: "Dashboard" })).toBeVisible();
+  await temporaryAdminPage.close();
+
+  const adminRevokePage = await browser.newPage({ baseURL });
+  await login(adminRevokePage, adminUser, adminPass);
+  await adminRevokePage.goto("/admin.html?tab=users");
+  await ensureAdminState(adminRevokePage, submitterUser, false);
+  await adminRevokePage.goto("/admin.html?tab=log");
+  await expect(adminRevokePage.getByText("Site key rotation")).toBeVisible();
+  await adminRevokePage.close();
+
+  const revokedUserPage = await browser.newPage({ baseURL });
+  await login(revokedUserPage, submitterUser, submitterPass);
+  await revokedUserPage.goto("/admin.html");
+  await expect(revokedUserPage.locator("[data-workspace-title]")).toContainText("Profile options");
+  await expect(revokedUserPage.getByRole("button", { name: "Dashboard" })).toHaveCount(0);
+  await revokedUserPage.close();
+
+  const submitterAfterRevokePage = await browser.newPage({ baseURL });
+  await login(submitterAfterRevokePage, submitterUser, submitterPass);
+  await submitterAfterRevokePage.goto("/submit.html");
+  await submitterAfterRevokePage.getByRole("button", { name: "Add submission" }).click();
+  await submitterAfterRevokePage.locator('[data-submission-form] input[name="subject"]').fill(followUpSubjectLine);
+  await submitterAfterRevokePage.locator('[data-submission-form] input[name="location"]').fill("Phoenix, Arizona");
+  await submitterAfterRevokePage.locator('[data-submission-form] input[name="entityRefs"]').fill(entityName);
+  await submitterAfterRevokePage.locator('[data-submission-form] textarea[name="details"]').fill("Smoke-test follow-up details after revoke.");
+  await submitterAfterRevokePage.locator('[data-submission-form]').getByRole("button", { name: "Save submission" }).click();
+  await expect(submitterAfterRevokePage.getByText(followUpSubjectLine)).toBeVisible();
+  await submitterAfterRevokePage.close();
+
+  const adminFinalReviewPage = await browser.newPage({ baseURL });
+  await login(adminFinalReviewPage, adminUser, adminPass);
+  await adminFinalReviewPage.goto("/admin.html?tab=submissions");
+  const followUpCard = adminFinalReviewPage.locator(".roster-item", { hasText: followUpSubjectLine }).first();
+  await expect(followUpCard).toBeVisible();
+  await followUpCard.getByRole("button", { name: "Approve" }).click();
+  await expect(followUpCard.getByText("approved")).toBeVisible();
+  await adminFinalReviewPage.close();
 });
 
 async function login(page, username, password) {
@@ -98,6 +149,24 @@ async function openFirstPost(page) {
   const href = await link.getAttribute("href");
   if (!href) throw new Error("No post link found on investigations page.");
   return href;
+}
+
+async function ensureAdminState(page, username, shouldBeAdmin) {
+  const userCard = page.locator(".roster-item", { hasText: username }).first();
+  await expect(userCard).toBeVisible();
+  const makeAdminButton = userCard.getByRole("button", { name: "Make admin" });
+  const removeAdminButton = userCard.getByRole("button", { name: "Remove admin" });
+  if (shouldBeAdmin) {
+    if (await makeAdminButton.count()) {
+      await makeAdminButton.click();
+    }
+    await expect(userCard.getByText("admin")).toBeVisible();
+    return;
+  }
+  if (await removeAdminButton.count()) {
+    await removeAdminButton.click();
+  }
+  await expect(userCard.getByRole("button", { name: "Make admin" })).toBeVisible();
 }
 
 function requiredEnv(name) {
