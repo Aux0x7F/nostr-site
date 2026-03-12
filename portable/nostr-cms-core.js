@@ -1150,7 +1150,9 @@ async function queryEvents(filters) {
   const { SimplePool } = tools;
   const pool = new SimplePool();
   try {
-    const normalized = (Array.isArray(filters) ? filters : [filters]).filter((filter) => filter && typeof filter === "object");
+    const normalized = expandQueryFilters(
+      (Array.isArray(filters) ? filters : [filters]).filter((filter) => filter && typeof filter === "object")
+    );
     const results = await Promise.allSettled(
       normalized.map((filter) =>
         withTimeout(pool.querySync(config.nostr.relays, filter, {}), config.nostr.connectTimeoutMs)
@@ -1167,6 +1169,64 @@ async function queryEvents(filters) {
   } finally {
     pool.close(config.nostr.relays);
   }
+}
+
+function expandQueryFilters(filters) {
+  const chunkSize = normalizeFilterChunkSize(config?.nostr?.filterChunkSize);
+  const expanded = [];
+  const seen = new Set();
+  for (const filter of filters) {
+    const chunks = splitFilterArrays(filter, chunkSize);
+    for (const chunk of chunks) {
+      const key = stableFilterKey(chunk);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      expanded.push(chunk);
+    }
+  }
+  return expanded;
+}
+
+function splitFilterArrays(filter, chunkSize) {
+  let pending = [cloneFilter(filter)];
+  for (const [key, value] of Object.entries(filter || {})) {
+    if (!Array.isArray(value) || value.length <= chunkSize) continue;
+    const parts = chunkArray(value, chunkSize);
+    pending = pending.flatMap((entry) =>
+      parts.map((part) => ({
+        ...entry,
+        [key]: part
+      }))
+    );
+  }
+  return pending;
+}
+
+function cloneFilter(filter) {
+  return Object.fromEntries(
+    Object.entries(filter || {}).map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value])
+  );
+}
+
+function stableFilterKey(filter) {
+  return JSON.stringify(
+    Object.entries(filter || {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value])
+  );
+}
+
+function chunkArray(values, chunkSize) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function normalizeFilterChunkSize(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 2 ? Math.floor(number) : 12;
 }
 
 function withAppTag(tags) {

@@ -34,6 +34,7 @@ export const SITE = Object.freeze({
     connectTimeoutMs: 3200,
     privateLoadLimit: 200,
     publicLoadLimit: 400,
+    filterChunkSize: 12,
     toolScriptPaths: {
       bundle: "./vendor/event-tools.bundle.js",
       shim: "./vendor/event-tools-shim.js"
