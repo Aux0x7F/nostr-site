@@ -64,6 +64,8 @@ node setup-wizard.js --non-interactive --repo=owner/repo --repo-dir=/path/to/sit
 bash host-bootstrap.sh --site-repo=owner/site-repo --site-repo-dir=/srv/site --non-interactive
 ```
 
+Site-specific runtime details can also be passed through the wizard/bootstrap now, including `--host`, `--port`, `--blob-cache-base-url`, `--snapshot-blog-dir`, `--snapshot-blog-index`, `--snapshot-entities-path`, and `--snapshot-marker`.
+
 For a real campaign/site deployment, `--site-repo` and `--site-repo-dir` are the important knobs:
 
 - the runtime repo can stay `Aux0x7F/nostr-site`

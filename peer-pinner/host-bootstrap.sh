@@ -12,6 +12,13 @@ SITE_DOMAIN="${SITE_DOMAIN:-}"
 APP_TAG="${APP_TAG:-}"
 PROTOCOL_PREFIX="${PROTOCOL_PREFIX:-}"
 RELAYS="${RELAYS:-}"
+HOST_BIND="${HOST_BIND:-${HOST:-}}"
+PORT_BIND="${PORT_BIND:-${PORT:-}}"
+BLOB_CACHE_BASE_URL_VALUE="${BLOB_CACHE_BASE_URL_VALUE:-${BLOB_CACHE_BASE_URL:-}}"
+SNAPSHOT_BLOG_DIR_VALUE="${SNAPSHOT_BLOG_DIR_VALUE:-${SNAPSHOT_BLOG_DIR:-}}"
+SNAPSHOT_BLOG_INDEX_VALUE="${SNAPSHOT_BLOG_INDEX_VALUE:-${SNAPSHOT_BLOG_INDEX:-}}"
+SNAPSHOT_ENTITIES_PATH_VALUE="${SNAPSHOT_ENTITIES_PATH_VALUE:-${SNAPSHOT_ENTITIES_PATH:-}}"
+SNAPSHOT_MARKER_VALUE="${SNAPSHOT_MARKER_VALUE:-${SNAPSHOT_MARKER:-}}"
 PUBLISH_BOOTSTRAP=0
 NON_INTERACTIVE=0
 SERVICE_MODE="${SERVICE_MODE:-auto}"
@@ -35,6 +42,13 @@ while [[ $# -gt 0 ]]; do
     --app-tag=*) APP_TAG="${1#*=}" ;;
     --protocol-prefix=*) PROTOCOL_PREFIX="${1#*=}" ;;
     --relays=*) RELAYS="${1#*=}" ;;
+    --host=*) HOST_BIND="${1#*=}" ;;
+    --port=*) PORT_BIND="${1#*=}" ;;
+    --blob-cache-base-url=*) BLOB_CACHE_BASE_URL_VALUE="${1#*=}" ;;
+    --snapshot-blog-dir=*) SNAPSHOT_BLOG_DIR_VALUE="${1#*=}" ;;
+    --snapshot-blog-index=*) SNAPSHOT_BLOG_INDEX_VALUE="${1#*=}" ;;
+    --snapshot-entities-path=*) SNAPSHOT_ENTITIES_PATH_VALUE="${1#*=}" ;;
+    --snapshot-marker=*) SNAPSHOT_MARKER_VALUE="${1#*=}" ;;
     --service-mode=*) SERVICE_MODE="${1#*=}" ;;
     --publish-bootstrap) PUBLISH_BOOTSTRAP=1 ;;
     --non-interactive) NON_INTERACTIVE=1 ;;
@@ -314,6 +328,13 @@ run_setup_wizard() {
   if [[ -n "$APP_TAG" ]]; then args+=("--app-tag=${APP_TAG}"); fi
   if [[ -n "$PROTOCOL_PREFIX" ]]; then args+=("--protocol-prefix=${PROTOCOL_PREFIX}"); fi
   if [[ -n "$RELAYS" ]]; then args+=("--relays=${RELAYS}"); fi
+  if [[ -n "$HOST_BIND" ]]; then args+=("--host=${HOST_BIND}"); fi
+  if [[ -n "$PORT_BIND" ]]; then args+=("--port=${PORT_BIND}"); fi
+  if [[ -n "$BLOB_CACHE_BASE_URL_VALUE" ]]; then args+=("--blob-cache-base-url=${BLOB_CACHE_BASE_URL_VALUE}"); fi
+  if [[ -n "$SNAPSHOT_BLOG_DIR_VALUE" ]]; then args+=("--snapshot-blog-dir=${SNAPSHOT_BLOG_DIR_VALUE}"); fi
+  if [[ -n "$SNAPSHOT_BLOG_INDEX_VALUE" ]]; then args+=("--snapshot-blog-index=${SNAPSHOT_BLOG_INDEX_VALUE}"); fi
+  if [[ -n "$SNAPSHOT_ENTITIES_PATH_VALUE" ]]; then args+=("--snapshot-entities-path=${SNAPSHOT_ENTITIES_PATH_VALUE}"); fi
+  if [[ -n "$SNAPSHOT_MARKER_VALUE" ]]; then args+=("--snapshot-marker=${SNAPSHOT_MARKER_VALUE}"); fi
   if (( PUBLISH_BOOTSTRAP )); then args+=("--publish-bootstrap"); fi
   if (( NON_INTERACTIVE )); then args+=("--non-interactive"); fi
   echo "Running pinner setup wizard"
@@ -337,6 +358,13 @@ write_update_script() {
     if [[ -n "$APP_TAG" ]]; then printf ' \\\n  --app-tag="%s"' "${APP_TAG}"; fi
     if [[ -n "$PROTOCOL_PREFIX" ]]; then printf ' \\\n  --protocol-prefix="%s"' "${PROTOCOL_PREFIX}"; fi
     if [[ -n "$RELAYS" ]]; then printf ' \\\n  --relays="%s"' "${RELAYS}"; fi
+    if [[ -n "$HOST_BIND" ]]; then printf ' \\\n  --host="%s"' "${HOST_BIND}"; fi
+    if [[ -n "$PORT_BIND" ]]; then printf ' \\\n  --port="%s"' "${PORT_BIND}"; fi
+    if [[ -n "$BLOB_CACHE_BASE_URL_VALUE" ]]; then printf ' \\\n  --blob-cache-base-url="%s"' "${BLOB_CACHE_BASE_URL_VALUE}"; fi
+    if [[ -n "$SNAPSHOT_BLOG_DIR_VALUE" ]]; then printf ' \\\n  --snapshot-blog-dir="%s"' "${SNAPSHOT_BLOG_DIR_VALUE}"; fi
+    if [[ -n "$SNAPSHOT_BLOG_INDEX_VALUE" ]]; then printf ' \\\n  --snapshot-blog-index="%s"' "${SNAPSHOT_BLOG_INDEX_VALUE}"; fi
+    if [[ -n "$SNAPSHOT_ENTITIES_PATH_VALUE" ]]; then printf ' \\\n  --snapshot-entities-path="%s"' "${SNAPSHOT_ENTITIES_PATH_VALUE}"; fi
+    if [[ -n "$SNAPSHOT_MARKER_VALUE" ]]; then printf ' \\\n  --snapshot-marker="%s"' "${SNAPSHOT_MARKER_VALUE}"; fi
     if (( PUBLISH_BOOTSTRAP )); then printf ' \\\n  --publish-bootstrap'; fi
     if (( NON_INTERACTIVE )); then printf ' \\\n  --non-interactive'; fi
     printf '\n'
