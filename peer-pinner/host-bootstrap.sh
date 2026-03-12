@@ -324,7 +324,7 @@ write_update_script() {
   {
     echo '#!/usr/bin/env bash'
     echo 'set -euo pipefail'
-    printf 'exec "%s" \\\n' "${RUNTIME_PEER_PINNER_DIR}/host-bootstrap.sh"
+    printf 'exec bash "%s" \\\n' "${RUNTIME_PEER_PINNER_DIR}/host-bootstrap.sh"
     printf '  --install-repo="%s" \\\n' "${INSTALL_REPO_SLUG}"
     printf '  --branch="%s" \\\n' "${INSTALL_BRANCH}"
     printf '  --install-root="%s" \\\n' "${INSTALL_ROOT}"
