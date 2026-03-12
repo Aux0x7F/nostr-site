@@ -443,41 +443,55 @@ async function fetchPublicState() {
 
   try {
     const visitSince = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30;
+    const publicLimit = Number(config.nostr.publicLoadLimit || 400);
+    const privateLimit = Number(config.nostr.privateLoadLimit || 200);
     const filters = [
       {
         kinds: [
-          config.nostr.kinds.snapshot,
           config.nostr.kinds.adminClaim,
           config.nostr.kinds.adminRole,
           config.nostr.kinds.userMod,
-          config.nostr.kinds.nameClaim,
-          config.nostr.kinds.profile,
           config.nostr.kinds.snapshotRequest,
+          config.nostr.kinds.siteKey
+        ],
+        "#t": [config.nostr.appTag],
+        limit: Math.max(80, Math.ceil(publicLimit / 2))
+      },
+      {
+        kinds: [
+          config.nostr.kinds.nameClaim,
+          config.nostr.kinds.profile
+        ],
+        "#t": [config.nostr.appTag],
+        limit: Math.max(200, publicLimit)
+      },
+      {
+        kinds: [
+          config.nostr.kinds.snapshot,
           config.nostr.kinds.entity,
           config.nostr.kinds.draft,
           config.nostr.kinds.comment,
           config.nostr.kinds.commentMod,
           config.nostr.kinds.submissionStatus,
           config.nostr.kinds.adminKeyShare,
-          config.nostr.kinds.siteKey,
           config.nostr.kinds.blobRequest,
           config.nostr.kinds.blobFulfillment
         ],
         "#t": [config.nostr.appTag],
-        limit: config.nostr.publicLoadLimit
+        limit: publicLimit
       },
       {
         kinds: [config.nostr.kinds.visitPulse],
         "#t": [config.nostr.appTag],
         since: visitSince,
-        limit: Math.max(800, config.nostr.publicLoadLimit * 4)
+        limit: Math.max(800, publicLimit * 4)
       }
     ];
     filters.push({
       kinds: [config.nostr.kinds.tip],
       "#t": [config.nostr.appTag],
       "#k": ["submission"],
-      limit: config.nostr.privateLoadLimit
+      limit: privateLimit
     });
     const events = await queryEvents(filters);
     return buildPublicState(events, seedEntities);
@@ -708,11 +722,15 @@ function buildPublicState(events, seedEntities = []) {
       const commentId = firstTag(event, "d") || event.id;
       const postSlug = cleanSlug(payload?.post_slug || firstTag(event, "a"));
       if (!postSlug) continue;
+      const parentId = String(payload?.parent_id || firstTag(event, "parent") || firstTag(event, "e") || "").trim();
+      const rootId = String(payload?.root_id || firstTag(event, "root") || "").trim();
       const next = {
         id: commentId,
         post_slug: postSlug,
         author: normalizePubkey(event.pubkey),
         markdown: String(payload?.markdown || payload?.body || "").trim(),
+        parent_id: parentId,
+        root_id: rootId || (parentId ? parentId : ""),
         created_at: toUnix(event.created_at),
         id_event: event.id,
         _event: event

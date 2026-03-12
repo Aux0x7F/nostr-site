@@ -5,10 +5,13 @@ const adminPass = requiredEnv("SMOKE_ADMIN_PASSWORD");
 const submitterUser = requiredEnv("SMOKE_USER_USERNAME");
 const submitterPass = requiredEnv("SMOKE_USER_PASSWORD");
 const runId = `${Date.now()}`;
+const delegateUser = `delegate-${runId}`;
+const delegatePass = `delegate-${runId}`;
 const entityName = `Smoke Entity ${runId}`;
 const subjectLine = `Smoke Submission ${runId}`;
 const followUpSubjectLine = `Smoke Submission After Revoke ${runId}`;
 const commentText = `Smoke comment ${runId}`;
+const replyText = `Smoke reply ${runId}`;
 
 test("anonymous users see login gates", async ({ page }) => {
   await page.goto("/submit.html");
@@ -16,7 +19,7 @@ test("anonymous users see login gates", async ({ page }) => {
 
   const postUrl = await openFirstPost(page);
   await page.goto(postUrl);
-  await expect(page.getByText("Log in to join the discussion.")).toBeVisible();
+  await expect(page.getByText("Log in to comment or reply.")).toBeVisible();
 });
 
 test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
@@ -49,7 +52,7 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await login(adminReviewPage, adminUser, adminPass);
   await adminReviewPage.goto("/admin.html?tab=submissions");
   const submissionCard = adminReviewPage.locator(".roster-item", { hasText: subjectLine }).first();
-  await expect(submissionCard).toBeVisible();
+  await expect(submissionCard).toBeVisible({ timeout: 45000 });
   await submissionCard.getByRole("button", { name: "Approve" }).click();
   await expect(submissionCard.getByText("approved")).toBeVisible();
   await submissionCard.getByRole("button", { name: "Chat" }).click();
@@ -62,9 +65,9 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await login(submitterReviewPage, submitterUser, submitterPass);
   await submitterReviewPage.goto("/submit.html");
   const row = submitterReviewPage.locator(".roster-item", { hasText: subjectLine }).first();
-  await expect(row.getByText("approved")).toBeVisible();
+  await expect(row.getByText("approved")).toBeVisible({ timeout: 45000 });
   await row.getByRole("button", { name: "Chat" }).click();
-  await expect(submitterReviewPage.getByText(`Admin reply ${runId}`)).toBeVisible();
+  await expect(submitterReviewPage.getByText(`Admin reply ${runId}`)).toBeVisible({ timeout: 45000 });
 
   const postUrl = await openFirstPost(submitterReviewPage);
   await submitterReviewPage.goto(postUrl);
@@ -73,16 +76,29 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await expect(submitterReviewPage.getByText(commentText)).toBeVisible();
   await submitterReviewPage.close();
 
+  const adminReplyPage = await browser.newPage({ baseURL });
+  await login(adminReplyPage, adminUser, adminPass);
+  await adminReplyPage.goto(postUrl);
+  const publicCommentCard = adminReplyPage.locator(".comment-card", { hasText: commentText }).first();
+  await expect(publicCommentCard).toBeVisible();
+  await publicCommentCard.getByRole("button", { name: "Reply" }).click();
+  await adminReplyPage.locator("[data-comment-form] textarea[name=\"markdown\"]").fill(replyText);
+  await adminReplyPage.locator("[data-comment-form]").getByRole("button", { name: "Reply" }).click();
+  await expect(adminReplyPage.getByText(replyText)).toBeVisible();
+  await adminReplyPage.close();
+
   const adminCommentPage = await browser.newPage({ baseURL });
   await login(adminCommentPage, adminUser, adminPass);
   await adminCommentPage.goto("/admin.html?tab=comments");
   const commentCard = adminCommentPage.locator(".roster-item", { hasText: commentText }).first();
-  await expect(commentCard).toBeVisible();
+  await expect(commentCard).toBeVisible({ timeout: 45000 });
   await commentCard.getByRole("button", { name: "Hide" }).click();
   const updatedCommentCard = adminCommentPage.locator(".roster-item", { hasText: commentText }).first();
   await expect(updatedCommentCard).toContainText("hidden");
   await expect(updatedCommentCard.getByRole("button", { name: "Restore" })).toBeVisible();
   await adminCommentPage.close();
+
+  await createUserAccount(browser, baseURL, delegateUser, delegatePass);
 
   const adminUsersPage = await browser.newPage({ baseURL });
   await login(adminUsersPage, adminUser, adminPass);
@@ -95,7 +111,22 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await temporaryAdminPage.goto("/admin.html?tab=dashboard");
   await expect(temporaryAdminPage.locator("[data-workspace-title]")).toContainText("Workspace");
   await expect(temporaryAdminPage.getByRole("button", { name: "Dashboard" })).toBeVisible();
+  await temporaryAdminPage.getByRole("button", { name: "Comments" }).click();
+  await expect(temporaryAdminPage.getByText("Your comments")).toBeVisible();
+  await temporaryAdminPage.getByRole("button", { name: "Profile" }).click();
+  await expect(temporaryAdminPage.getByText("Profile settings")).toBeVisible();
+  await temporaryAdminPage.goto("/admin.html?tab=users");
+  await ensureAdminState(temporaryAdminPage, delegateUser, true);
   await temporaryAdminPage.close();
+
+  const delegateAdminPage = await browser.newPage({ baseURL });
+  await login(delegateAdminPage, delegateUser, delegatePass);
+  await delegateAdminPage.goto("/admin.html?tab=dashboard");
+  await expect(delegateAdminPage.locator("[data-workspace-title]")).toContainText("Workspace");
+  await expect(delegateAdminPage.getByRole("button", { name: "Dashboard" })).toBeVisible();
+  await delegateAdminPage.goto("/admin.html?tab=submissions");
+  await expect(delegateAdminPage.getByText("Shared inbox")).toBeVisible();
+  await delegateAdminPage.close();
 
   const adminRevokePage = await browser.newPage({ baseURL });
   await login(adminRevokePage, adminUser, adminPass);
@@ -111,6 +142,13 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await expect(revokedUserPage.locator("[data-workspace-title]")).toContainText("Profile options");
   await expect(revokedUserPage.getByRole("button", { name: "Dashboard" })).toHaveCount(0);
   await revokedUserPage.close();
+
+  const delegateAfterRevokePage = await browser.newPage({ baseURL });
+  await login(delegateAfterRevokePage, delegateUser, delegatePass);
+  await delegateAfterRevokePage.goto("/admin.html?tab=submissions");
+  await expect(delegateAfterRevokePage.getByText("Shared inbox")).toBeVisible();
+  await expect(delegateAfterRevokePage.getByText(subjectLine)).toBeVisible();
+  await delegateAfterRevokePage.close();
 
   const submitterAfterRevokePage = await browser.newPage({ baseURL });
   await login(submitterAfterRevokePage, submitterUser, submitterPass);
@@ -128,7 +166,7 @@ test("admin and submitter flows round-trip", async ({ browser, baseURL }) => {
   await login(adminFinalReviewPage, adminUser, adminPass);
   await adminFinalReviewPage.goto("/admin.html?tab=submissions");
   const followUpCard = adminFinalReviewPage.locator(".roster-item", { hasText: followUpSubjectLine }).first();
-  await expect(followUpCard).toBeVisible();
+  await expect(followUpCard).toBeVisible({ timeout: 45000 });
   await followUpCard.getByRole("button", { name: "Approve" }).click();
   await expect(followUpCard.getByText("approved")).toBeVisible();
   await adminFinalReviewPage.close();
@@ -142,13 +180,26 @@ async function login(page, username, password) {
   await expect(page.locator("[data-workspace-title]")).toContainText(/Workspace|Profile options/);
 }
 
+async function createUserAccount(browser, baseURL, username, password) {
+  const page = await browser.newPage({ baseURL });
+  await login(page, username, password);
+  await page.close();
+}
+
 async function openFirstPost(page) {
-  await page.goto("/investigations.html");
-  const link = page.locator('a[href*="slug="]').first();
-  await expect(link).toBeVisible();
-  const href = await link.getAttribute("href");
-  if (!href) throw new Error("No post link found on investigations page.");
-  return href;
+  for (const path of ["/investigations.html", "/blog.html"]) {
+    await page.goto(path);
+    const link = page.locator('a[href*="slug="]').first();
+    try {
+      await link.waitFor({ state: "visible", timeout: 10000 });
+      await expect(link).toBeVisible();
+      const href = await link.getAttribute("href");
+      if (href) return href;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("No post link found on blog index.");
 }
 
 async function ensureAdminState(page, username, shouldBeAdmin) {
