@@ -25,7 +25,7 @@ const PINNER_PUBKEY_OVERRIDE = process.env.PINNER_PUBKEY || "";
 const PINNER_ALIAS_OVERRIDE = process.env.PINNER_ALIAS || "";
 const MAX_REQ_EVENTS = Number(process.env.MAX_REQ_EVENTS || 5000);
 const TAG_FILTER = String(process.env.APP_TAG || "nostr-site-template").trim();
-const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34126,34127,34128,34129,34130,34131,34132,34133,34134,34135,34136,34137,34138,34139,34140");
+const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "4,34126,34127,34128,34129,34130,34131,34132,34133,34134,34135,34136,34137,34138,34139,34140,34142");
 const UPSTREAM_RELAYS = parseRelays(process.env.UPSTREAM_RELAYS || "wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol");
 const UPSTREAM_BACKFILL_LIMIT = Number(process.env.UPSTREAM_BACKFILL_LIMIT || 7000);
 const UPSTREAM_RECONNECT_MS = Number(process.env.UPSTREAM_RECONNECT_MS || 2500);
@@ -57,6 +57,7 @@ const KINDS = {
   draft: 34134,
   blobRequest: 34139,
   blobFulfillment: 34140,
+  siteKey: 34142,
 };
 
 if (!Number.isFinite(PORT) || PORT <= 0) {

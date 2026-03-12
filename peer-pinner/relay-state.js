@@ -17,6 +17,7 @@ const DEFAULT_KINDS = Object.freeze({
   blobRequest: 34139,
   blobFulfillment: 34140,
   visitPulse: 34141,
+  siteKey: 34142,
 });
 
 async function detectRelaySiteState({

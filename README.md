@@ -13,6 +13,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - guest-backed visit telemetry for lightweight dashboard metrics
 - submit-side pending entity suggestions that admins can moderate later
 - admin-requested seed bakedowns with optional GitHub PR sync via peer pinner
+- site-key rotation events with re-shared admin inbox access
+- lightweight browser smoke tests under `tooling/browser-smoke`
 
 ## Structure
 
@@ -82,7 +84,8 @@ The intended trust split is:
 ## Security caveats
 
 - Fulfillment-time revocation is handled at the pinner boundary: revoked admins should not be able to trigger new downstream actions once their signer is no longer authorized.
-- This does not revoke access to material already encrypted to an old shared site key. Key rotation is still the missing piece there.
+- Site-key rotation is now handled in the browser/admin layer: revoking an admin can rotate the active site inbox pubkey and re-share it to the remaining admins without hand-editing config.
+- Older encrypted material is still not retroactively re-encrypted. A revoked admin who already has an old site key can still read older submissions addressed to that old key.
 - If the pinner can push directly to the live deploy branch, it is operationally root-equivalent regardless of the Nostr governance model.
 
 ## Storage caveats
@@ -146,3 +149,7 @@ When you want another site to consume the generic layer, the current plan is:
 3. wrap site-specific config and UI around that package
 
 That is the path `truecost` should move onto once `nostr-site` is pushed and the generic bundle location is settled.
+
+## Browser smoke harness
+
+`tooling/browser-smoke/` contains a small Playwright suite for live deployed sites. It is intended for admin/login/submission/comment smoke coverage against a real URL, not as part of the shipped client bundle.

@@ -234,7 +234,7 @@ ensure_github_auth() {
     return
   fi
   echo "GitHub CLI is not authenticated for ${SERVICE_USER}. Launching gh auth login."
-  run_as_service_user gh auth login --web --git-protocol https --scopes repo,workflow
+  run_as_service_user gh auth login --web --git-protocol https --scopes repo
 }
 
 sync_runtime_repo() {

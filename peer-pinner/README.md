@@ -47,7 +47,7 @@ Primary one-line bootstrap for Linux hosts:
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/nostr-site/main/peer-pinner/install.sh | bash
 ```
 
-That entrypoint now downloads and runs [host-bootstrap.sh](C:/projects/nostr-site/peer-pinner/host-bootstrap.sh) on Linux. On Windows shells it falls back to [host-bootstrap.ps1](C:/projects/nostr-site/peer-pinner/host-bootstrap.ps1).
+That entrypoint now downloads and runs `peer-pinner/host-bootstrap.sh` on Linux. On Windows shells it falls back to `peer-pinner/host-bootstrap.ps1`.
 
 Useful non-interactive variants:
 
@@ -80,7 +80,7 @@ The Windows host bootstrap script will:
 - clone or update the `nostr-site` repo
 - run `npm ci` and `npm run build:all`
 - run the setup wizard
-- register a per-user scheduled task that keeps [service-runner.ps1](C:/projects/nostr-site/peer-pinner/service-runner.ps1) alive and restarts it after updates or crashes
+- register a per-user scheduled task that keeps `peer-pinner/service-runner.ps1` alive and restarts it after updates or crashes
 
 The setup wizard will:
 
@@ -154,6 +154,29 @@ Recommended minimum capability is:
 - branch push access for the bakedown branch
 - pull request creation/update
 
+Least-privilege auth options:
+
+- Best: a fine-grained token limited to the target repo with `Contents: Read and write` and `Pull requests: Read and write`, then:
+
+```bash
+printf '%s' "$GITHUB_TOKEN" | gh auth login --with-token
+```
+
+- Smallest web-login path that still works with the current pinner flow:
+
+```bash
+gh auth login --web --git-protocol https --scopes repo
+```
+
+`workflow` is not required for the current bakedown/PR bridge.
+
+On headless Linux hosts, `gh auth login` may print a warning like `Authentication credentials saved in plain text`. That means `gh` could not use a system credential store and will fall back to `~/.config/gh/hosts.yml`. On a typical headless Fedora host, `secret-tool` may be installed while no active user keyring daemon is running, so this fallback is expected unless you configure a working credential store.
+
+If you do not want that fallback:
+
+- prefer a fine-grained token passed through `GITHUB_TOKEN` in the pinner environment
+- or configure a real credential store such as `pass` or a running Secret Service / keyring daemon for the service user before running `gh auth login`
+
 Avoid direct deploy-branch write authority unless you intentionally want the pinner to be root-equivalent.
 
 ## Blob workflow
@@ -188,7 +211,7 @@ The intended flow is:
 
 ## Optional local blob endpoints
 
-The package still exposes small local blob endpoints for inspection and lab use:
+The package still exposes small local blob endpoints for inspection and local testing:
 
 - `PUT /upload`
 - `HEAD /upload`

@@ -87,7 +87,7 @@ function Ensure-GitHubAuth {
   $status = Run-External -FilePath "gh" -ArgumentList @("auth", "status", "-h", "github.com") -AllowFailure
   if ($status.ExitCode -ne 0) {
     Write-Host "GitHub CLI is not authenticated. Launching gh auth login."
-    & gh auth login --web --git-protocol https --scopes repo,workflow
+    & gh auth login --web --git-protocol https --scopes repo
     return
   }
 

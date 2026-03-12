@@ -5,13 +5,17 @@ import {
   decryptUploadedBlob,
   deriveIdentity,
   ensureEventToolsLoaded,
+  generateSecretKeyHex,
+  loadAdminKeyShares,
   loadAdminKeyShare,
   loadInboxSubmissions,
   loadPublicState,
   loadSubmissionThread,
   publishAdminKeyShare,
+  publishSiteKeyEvent,
   publishSubmissionChat,
   publishTaggedJson,
+  resolveSitePubkey,
   shortKey,
   uploadPublicBlob
 } from "../nostr.js";
@@ -21,6 +25,7 @@ const workspaceState = {
   session: getStoredSession(),
   viewer: null,
   publicState: null,
+  siteKeyShares: [],
   siteKeyShare: null,
   inboxSubmissions: [],
   staticSlugs: [],
@@ -178,11 +183,17 @@ async function refreshWorkspace(force = false) {
     ? deriveIdentity(workspaceState.session.secretKeyHex)
     : null;
   workspaceState.publicState = await loadPublicState(force);
+  workspaceState.siteKeyShares = workspaceState.session
+    ? await loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
+    : [];
   workspaceState.siteKeyShare = workspaceState.session
-    ? await loadAdminKeyShare(workspaceState.session.secretKeyHex).catch(() => null)
+    ? await loadAdminKeyShare(
+        workspaceState.session.secretKeyHex,
+        resolveSitePubkey(workspaceState.publicState)
+      ).catch(() => null)
     : null;
   if (currentUserHasInboxAccess()) {
-    workspaceState.inboxSubmissions = await loadInboxSubmissions(workspaceState.siteKeyShare.siteSecretKeyHex).catch(() => []);
+    workspaceState.inboxSubmissions = await loadInboxSubmissions(workspaceState.siteKeyShares).catch(() => []);
   } else {
     workspaceState.inboxSubmissions = [];
   }
@@ -335,7 +346,7 @@ function renderProfilePane() {
         </form>
         ${
           currentUserIsAdmin()
-            ? `<p class="muted-text">${workspaceState.siteKeyShare ? "This account currently holds an encrypted share of the site inbox key." : "No site inbox key share has been loaded for this account yet."}</p>`
+            ? `<p class="muted-text">${renderSiteKeyShareStatus()}</p>`
             : ""
         }
       </section>
@@ -382,6 +393,8 @@ function renderUsersPane() {
 }
 
 function renderUserCard(user) {
+  const isRootAdmin = user.pubkey === workspaceState.publicState?.rootAdminPubkey;
+  const canChangeAdmin = currentUserIsAdmin() && !isRootAdmin && user.pubkey !== workspaceState.viewer?.pubkey;
   return `
     <article class="roster-item">
       <div class="workspace-list__row">
@@ -400,7 +413,13 @@ function renderUserCard(user) {
         currentUserIsAdmin()
           ? `
             <div class="button-row button-row--tight">
-              <button class="button-ghost" type="button" data-user-action="admin" data-target-pubkey="${user.pubkey}" ${user.isAdmin ? 'data-mode="revoke"' : 'data-mode="grant"'}>${user.isAdmin ? "Remove admin" : "Make admin"}</button>
+              ${
+                canChangeAdmin
+                  ? `<button class="button-ghost" type="button" data-user-action="admin" data-target-pubkey="${user.pubkey}" ${user.isAdmin ? 'data-mode="revoke"' : 'data-mode="grant"'}>${user.isAdmin ? "Remove admin" : "Make admin"}</button>`
+                  : isRootAdmin
+                    ? `<span class="tag">root admin</span>`
+                    : ""
+              }
               ${
                 user.isAdmin && user.pubkey !== workspaceState.viewer?.pubkey && workspaceState.siteKeyShare
                   ? `<button class="button-ghost" type="button" data-user-action="share-site-key" data-target-pubkey="${user.pubkey}">Share site key</button>`
@@ -485,7 +504,8 @@ function renderLogPane() {
         SITE.nostr.kinds.draft,
         SITE.nostr.kinds.commentMod,
         SITE.nostr.kinds.submissionStatus,
-        SITE.nostr.kinds.adminKeyShare
+        SITE.nostr.kinds.adminKeyShare,
+        SITE.nostr.kinds.siteKey
       ].includes(Number(event.kind))
     )
     .slice(0, 40);
@@ -922,12 +942,17 @@ async function handleAttachmentDownload(button) {
   const submission = workspaceState.inboxSubmissions.find((item) => item.id === (button.getAttribute("data-download-attachment") || ""));
   const attachment = submission?.latest?.payload?.attachment;
   if (!attachment?.url) return;
+  const siteKeyShare = findSiteKeyShare(attachment.recipient_pubkey || submission?.latest?.recipient_pubkey || "");
+  if (!siteKeyShare) {
+    window.alert("No matching site key share is loaded for this attachment.");
+    return;
+  }
   const original = button.textContent;
   button.disabled = true;
   button.textContent = "Decrypting";
   try {
     const file = await decryptUploadedBlob(
-      workspaceState.siteKeyShare.siteSecretKeyHex,
+      siteKeyShare.siteSecretKeyHex,
       attachment.author_pubkey || submission.author,
       attachment
     );
@@ -974,6 +999,13 @@ async function handleUserAction(button) {
         targetPubkey,
         workspaceState.siteKeyShare.siteSecretKeyHex
       );
+    }
+    if (mode === "revoke") {
+      try {
+        await rotateSiteInboxKey([targetPubkey], "admin-revoke");
+      } catch (error) {
+        window.alert(`Admin revoked, but site inbox key rotation failed: ${String(error?.message || error || "Unknown error.")}`);
+      }
     }
   }
 
@@ -1059,7 +1091,11 @@ async function handleCommentAction(button) {
       note
     }
   });
-  await refreshWorkspace(true);
+  applyLocalCommentModeration(commentId, action, note);
+  renderWorkspace();
+  window.setTimeout(() => {
+    void refreshWorkspace(true);
+  }, 1800);
 }
 
 async function handleDraftSave(form) {
@@ -1152,7 +1188,7 @@ async function handleSnapshotRequest(button) {
 async function hydrateChatModal() {
   if (!workspaceState.chatModal || !currentUserHasInboxAccess()) return;
   workspaceState.chatModal.messages = await loadSubmissionThread(
-    workspaceState.siteKeyShare.siteSecretKeyHex,
+    workspaceState.siteKeyShares,
     workspaceState.chatModal.submissionId,
     workspaceState.chatModal.targetPubkey
   ).catch(() => []);
@@ -1164,6 +1200,10 @@ async function handleChatSend(form) {
   const formData = new FormData(form);
   const body = String(formData.get("body") || "").trim();
   if (!body) return;
+  if (!workspaceState.siteKeyShare) {
+    window.alert("No current site inbox key share is loaded for replies.");
+    return;
+  }
   await publishSubmissionChat(workspaceState.siteKeyShare.siteSecretKeyHex, {
     targetPubkey: String(formData.get("targetPubkey") || ""),
     submissionId: String(formData.get("submissionId") || ""),
@@ -1369,8 +1409,7 @@ function currentUserHasInboxAccess() {
   return Boolean(
     currentUserIsAdmin() &&
       workspaceState.siteKeyShare &&
-      SITE.nostr.inboxPubkey &&
-      workspaceState.siteKeyShare.sitePubkey === SITE.nostr.inboxPubkey
+      workspaceState.siteKeyShare.sitePubkey === activeSitePubkey()
   );
 }
 
@@ -1430,6 +1469,8 @@ function logLabel(event) {
       return "Submission status";
     case SITE.nostr.kinds.adminKeyShare:
       return "Site key share";
+    case SITE.nostr.kinds.siteKey:
+      return "Site key rotation";
     default:
       return `Event ${event.kind}`;
   }
@@ -1445,6 +1486,7 @@ function logTarget(event) {
     case SITE.nostr.kinds.adminRole:
     case SITE.nostr.kinds.userMod:
     case SITE.nostr.kinds.adminKeyShare:
+    case SITE.nostr.kinds.siteKey:
       return { href: "./admin.html?tab=users", description: shortKey(event.pubkey) };
     case SITE.nostr.kinds.entity:
       return { href: "./admin.html?tab=entities", description: slug || shortKey(event.pubkey) };
@@ -1462,6 +1504,93 @@ function logTarget(event) {
 function firstTag(event, key) {
   const hit = (event.tags || []).find((tag) => Array.isArray(tag) && tag[0] === key);
   return hit ? String(hit[1] || "") : "";
+}
+
+function activeSitePubkey() {
+  return resolveSitePubkey(workspaceState.publicState);
+}
+
+function findSiteKeyShare(sitePubkey = "") {
+  const targetPubkey = String(sitePubkey || "").trim().toLowerCase() || activeSitePubkey();
+  return workspaceState.siteKeyShares.find((share) => share.sitePubkey === targetPubkey) || null;
+}
+
+function renderSiteKeyShareStatus() {
+  if (workspaceState.siteKeyShare) {
+    const olderCount = Math.max(0, workspaceState.siteKeyShares.length - 1);
+    return olderCount
+      ? `This account holds the current site inbox key share and ${olderCount} older share${olderCount === 1 ? "" : "s"} for earlier encrypted material.`
+      : "This account currently holds the active site inbox key share.";
+  }
+  if (workspaceState.siteKeyShares.length) {
+    return "Only older site inbox key shares are loaded for this account. Ask another admin to share the current key.";
+  }
+  return "No site inbox key share has been loaded for this account yet.";
+}
+
+function applyLocalCommentModeration(commentId, action, note) {
+  const publicState = workspaceState.publicState;
+  if (!publicState || !Array.isArray(publicState.allComments)) return;
+  const moderation = {
+    action: action === "restore" ? "restore" : "hide",
+    note: String(note || "").trim(),
+    updated_at: Math.floor(Date.now() / 1000),
+    by: workspaceState.viewer?.pubkey || ""
+  };
+  publicState.allComments = publicState.allComments.map((comment) =>
+    comment.id === commentId
+      ? {
+          ...comment,
+          visibility: moderation.action === "hide" ? "hidden" : "visible",
+          moderation
+        }
+      : comment
+  );
+  publicState.comments = publicState.allComments.filter((comment) => comment.visibility !== "hidden");
+  publicState.hiddenComments = publicState.allComments.filter((comment) => comment.visibility === "hidden");
+  publicState.commentsByPost = regroupComments(publicState.comments, "post_slug");
+  publicState.commentsByAuthor = regroupComments(publicState.comments, "author");
+  if (publicState.metrics) {
+    publicState.metrics.commentCount = publicState.comments.length;
+    publicState.metrics.hiddenCommentCount = publicState.hiddenComments.length;
+  }
+  for (const user of publicState.users || []) {
+    user.commentCount = (publicState.commentsByAuthor.get(user.pubkey) || []).length;
+  }
+}
+
+function regroupComments(comments, key) {
+  const buckets = new Map();
+  for (const comment of Array.isArray(comments) ? comments : []) {
+    const bucketKey = String(comment?.[key] || "").trim();
+    if (!bucketKey) continue;
+    const bucket = buckets.get(bucketKey) || [];
+    bucket.push(comment);
+    buckets.set(bucketKey, bucket);
+  }
+  return buckets;
+}
+
+async function rotateSiteInboxKey(excludedPubkeys = [], reason = "rotation") {
+  if (!workspaceState.session || !workspaceState.siteKeyShare) {
+    throw new Error("Load the current site inbox key share before rotating it.");
+  }
+  const nextSiteSecretKeyHex = await generateSecretKeyHex();
+  const previousSitePubkey = activeSitePubkey();
+  const recipients = dedupe(
+    (workspaceState.publicState?.admins || []).filter((pubkey) => !excludedPubkeys.includes(pubkey))
+  );
+  await publishSiteKeyEvent(workspaceState.session.secretKeyHex, nextSiteSecretKeyHex, {
+    previousSitePubkey,
+    reason
+  });
+  for (const pubkey of recipients) {
+    await publishAdminKeyShare(
+      workspaceState.session.secretKeyHex,
+      pubkey,
+      nextSiteSecretKeyHex
+    );
+  }
 }
 
 async function loadStaticSlugs() {

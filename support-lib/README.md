@@ -14,6 +14,7 @@ Minified reusable browser library built from the `portable/` source layer.
 - `createBlobStoreApi`
 - content parsing and enrichment helpers
 - generic admin key-share and relay-state helpers through `createNostrCmsClient`
+- dynamic site-key helpers through `createNostrCmsClient`
 
 `createBlobStoreApi` handles:
 
@@ -22,6 +23,12 @@ Minified reusable browser library built from the `portable/` source layer.
 - polling relay state for `blobFulfillment` before retrying reads
 
 `createDeterministicSessionApi` now supports both named account sessions and persistent guest identities for anonymous signed public actions.
+
+`createNostrCmsClient` now also supports:
+
+- public site-key announcement events for inbox rotation
+- loading multiple admin key shares at once for backward reads across rotated inbox keys
+- resolving the active site inbox pubkey from relay state instead of only static config
 
 ## Build
 

@@ -74,12 +74,43 @@ function deriveIdentity(secretKeyHex) {
   if (!tools) throw new Error("Nostr tools unavailable.");
   const clean = String(secretKeyHex || "").trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(clean)) throw new Error("Secret key must be 64 hex characters.");
-  const secretKey = tools.hexToBytes(clean);
+  const secretKey = resolveHexToBytes(tools)(clean);
   return {
     secretKey,
     secretKeyHex: clean,
     pubkey: tools.getPublicKey(secretKey)
   };
+}
+
+function resolveHexToBytes(tools) {
+  if (typeof tools?.hexToBytes === "function") return tools.hexToBytes;
+  if (typeof tools?.utils?.hexToBytes === "function") return tools.utils.hexToBytes;
+  return hexToBytes;
+}
+
+function resolveConfiguredSitePubkey() {
+  return normalizePubkey(config?.nostr?.inboxPubkey || "");
+}
+
+function resolveSitePubkey(publicState = null) {
+  return normalizePubkey(publicState?.siteInfo?.activePubkey || resolveConfiguredSitePubkey());
+}
+
+async function generateSecretKeyHex() {
+  await ensureEventToolsLoaded();
+  let attempt = 0;
+  while (attempt < 16) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const secretKeyHex = bytesToHex(bytes);
+    try {
+      deriveIdentity(secretKeyHex);
+      return secretKeyHex;
+    } catch {
+      attempt += 1;
+    }
+  }
+  throw new Error("Could not generate a valid site key.");
 }
 
 async function loadPublicState(force = false) {
@@ -147,18 +178,20 @@ async function publishEncryptedJson({
   };
 }
 
-async function publishSubmission(secretKeyHex, payload) {
-  if (!config.nostr.inboxPubkey) throw new Error("Inbox pubkey is not configured.");
+async function publishSubmission(secretKeyHex, payload, options = {}) {
+  const sitePubkey = normalizePubkey(options.sitePubkey || payload?.site_pubkey || resolveConfiguredSitePubkey());
+  if (!sitePubkey) throw new Error("Inbox pubkey is not configured.");
   const submissionId = cleanSlug(payload?.submission_id || payload?.subject || `submission-${Date.now()}`) || `submission-${Date.now()}`;
   const body = {
     protocol: protocolName("submission"),
     submission_id: submissionId,
     updated_at: new Date().toISOString(),
-    ...payload
+    ...payload,
+    site_pubkey: sitePubkey
   };
   return publishEncryptedJson({
     secretKeyHex,
-    targetPubkey: config.nostr.inboxPubkey,
+    targetPubkey: sitePubkey,
     tags: [["d", submissionId], ["k", "submission"], ...buildBlobTags(body.attachment)],
     content: body
   });
@@ -183,14 +216,11 @@ async function publishSubmissionChat(secretKeyHex, { targetPubkey, submissionId,
 
 async function publishAdminKeyShare(secretKeyHex, targetPubkey, siteSecretKeyHex) {
   const siteIdentity = deriveIdentity(siteSecretKeyHex);
-  if (siteIdentity.pubkey !== config.nostr.inboxPubkey) {
-    throw new Error("Site key does not match the configured inbox pubkey.");
-  }
   return publishEncryptedJson({
     secretKeyHex,
     targetPubkey,
     kind: config.nostr.kinds.adminKeyShare,
-    tags: [["d", `site-key:${config.nostr.inboxPubkey}`], ["k", "admin-key-share"]],
+    tags: [["d", `site-key:${siteIdentity.pubkey}`], ["k", "admin-key-share"], ["site", siteIdentity.pubkey]],
     content: {
       protocol: protocolName("admin-key-share"),
       site_pubkey: siteIdentity.pubkey,
@@ -200,8 +230,32 @@ async function publishAdminKeyShare(secretKeyHex, targetPubkey, siteSecretKeyHex
   });
 }
 
-async function loadAdminKeyShare(secretKeyHex) {
-  if (!config.nostr.inboxPubkey) return null;
+async function publishSiteKeyEvent(secretKeyHex, siteSecretKeyHex, options = {}) {
+  if (!config.nostr.kinds.siteKey) throw new Error("Site key events are not configured.");
+  const siteIdentity = deriveIdentity(siteSecretKeyHex);
+  const previousSitePubkey = normalizePubkey(options.previousSitePubkey || "");
+  const reason = String(options.reason || "rotation").trim() || "rotation";
+  const rotatedAt = String(options.rotatedAt || new Date().toISOString()).trim() || new Date().toISOString();
+  return publishTaggedJson({
+    kind: config.nostr.kinds.siteKey,
+    secretKeyHex,
+    tags: [
+      ["d", "site-key"],
+      ["site", siteIdentity.pubkey],
+      ...(previousSitePubkey ? [["prev", previousSitePubkey]] : []),
+      ["op", reason]
+    ],
+    content: {
+      protocol: protocolName("site-key"),
+      site_pubkey: siteIdentity.pubkey,
+      previous_site_pubkey: previousSitePubkey,
+      reason,
+      rotated_at: rotatedAt
+    }
+  });
+}
+
+async function loadAdminKeyShares(secretKeyHex) {
   const tools = getEventTools();
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { nip04 } = tools;
@@ -214,29 +268,37 @@ async function loadAdminKeyShare(secretKeyHex) {
       limit: config.nostr.privateLoadLimit
     }
   ]);
+  const shares = new Map();
   for (const event of events.sort(compareEventDesc)) {
     try {
       const payload = parseObject(await nip04.decrypt(identity.secretKey, event.pubkey, event.content));
       if (!payload || payload.protocol !== protocolName("admin-key-share")) continue;
       const siteSecretKeyHex = String(payload.site_secret_key_hex || "").trim().toLowerCase();
       const siteIdentity = deriveIdentity(siteSecretKeyHex);
-      if (siteIdentity.pubkey !== config.nostr.inboxPubkey) continue;
-      return {
+      if (!isHex64(siteIdentity.pubkey)) continue;
+      if (shares.has(siteIdentity.pubkey)) continue;
+      shares.set(siteIdentity.pubkey, {
         siteSecretKeyHex,
         sitePubkey: siteIdentity.pubkey,
         senderPubkey: event.pubkey,
         sharedAt: String(payload.shared_at || ""),
         event
-      };
+      });
     } catch {
       continue;
     }
   }
-  return null;
+  return [...shares.values()].sort((left, right) => compareEventDesc(left.event, right.event));
+}
+
+async function loadAdminKeyShare(secretKeyHex, sitePubkey = "") {
+  const shares = await loadAdminKeyShares(secretKeyHex);
+  const targetSitePubkey = normalizePubkey(sitePubkey || "");
+  if (!targetSitePubkey) return shares[0] || null;
+  return shares.find((share) => share.sitePubkey === targetSitePubkey) || null;
 }
 
 async function loadUserSubmissions(secretKeyHex) {
-  if (!config.nostr.inboxPubkey) return [];
   const tools = getEventTools();
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { nip04 } = tools;
@@ -245,21 +307,25 @@ async function loadUserSubmissions(secretKeyHex) {
     {
       kinds: [config.nostr.kinds.tip],
       authors: [identity.pubkey],
-      "#p": [config.nostr.inboxPubkey],
       "#t": [config.nostr.appTag],
-      "#k": ["submission"],
       limit: config.nostr.privateLoadLimit
     }
   ]);
   const submissions = [];
   for (const event of events.sort(compareEventDesc)) {
     try {
-      const payload = parseObject(await nip04.decrypt(identity.secretKey, config.nostr.inboxPubkey, event.content));
-      if (!payload) continue;
+      const recipientPubkey = normalizePubkey(firstTag(event, "p"));
+      if (!isHex64(recipientPubkey)) continue;
+      const payload = parseObject(await nip04.decrypt(identity.secretKey, recipientPubkey, event.content));
+      if (!payload || payload.protocol !== protocolName("submission")) continue;
       submissions.push({
         id: cleanSlug(payload.submission_id || firstTag(event, "d")) || event.id,
         author: event.pubkey,
-        payload,
+        recipient_pubkey: recipientPubkey,
+        payload: {
+          ...payload,
+          site_pubkey: normalizePubkey(payload?.site_pubkey || recipientPubkey)
+        },
         event
       });
     } catch {
@@ -269,39 +335,45 @@ async function loadUserSubmissions(secretKeyHex) {
   return groupSubmissions(submissions);
 }
 
-async function loadInboxSubmissions(secretKeyHex) {
-  if (!config.nostr.inboxPubkey) return [];
+async function loadInboxSubmissions(secretKeyInput) {
   const tools = getEventTools();
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { nip04 } = tools;
-  const identity = deriveIdentity(secretKeyHex);
-  if (identity.pubkey !== config.nostr.inboxPubkey) {
-    throw new Error("This key cannot decrypt the shared inbox.");
-  }
+  const siteShares = normalizeSiteKeyShares(secretKeyInput);
+  const targetPubkeys = siteShares.map((share) => share.sitePubkey);
+  if (!targetPubkeys.length) return [];
+  const siteShareByPubkey = new Map(siteShares.map((share) => [share.sitePubkey, share]));
   const events = await queryEvents([
     {
       kinds: [config.nostr.kinds.tip],
-      "#p": [identity.pubkey],
+      "#p": targetPubkeys,
       "#t": [config.nostr.appTag],
-      "#k": ["submission"],
       limit: config.nostr.privateLoadLimit
     }
   ]);
   const submissions = [];
   for (const event of events.sort(compareEventDesc)) {
+    const recipientPubkey = normalizePubkey(firstTag(event, "p"));
+    const siteShare = siteShareByPubkey.get(recipientPubkey);
+    if (!siteShare) continue;
     try {
-      const payload = parseObject(await nip04.decrypt(identity.secretKey, event.pubkey, event.content));
-      if (!payload) continue;
+      const payload = parseObject(await nip04.decrypt(siteShare.secretKey, event.pubkey, event.content));
+      if (!payload || payload.protocol !== protocolName("submission")) continue;
       submissions.push({
         id: cleanSlug(payload.submission_id || firstTag(event, "d")) || event.id,
         author: event.pubkey,
-        payload,
+        recipient_pubkey: recipientPubkey,
+        payload: {
+          ...payload,
+          site_pubkey: normalizePubkey(payload?.site_pubkey || recipientPubkey)
+        },
         event
       });
     } catch {
       submissions.push({
         id: firstTag(event, "d") || event.id,
         author: event.pubkey,
+        recipient_pubkey: recipientPubkey,
         payload: null,
         event,
         error: "Could not decrypt this submission."
@@ -311,42 +383,49 @@ async function loadInboxSubmissions(secretKeyHex) {
   return groupSubmissions(submissions);
 }
 
-async function loadSubmissionThread(secretKeyHex, submissionId, counterpartPubkey) {
+async function loadSubmissionThread(secretKeyInput, submissionId, counterpartPubkeys) {
   const tools = getEventTools();
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { nip04 } = tools;
-  const identity = deriveIdentity(secretKeyHex);
+  const identities = normalizeThreadIdentities(secretKeyInput);
   const cleanId = cleanSlug(submissionId);
+  const selfPubkeys = identities.map((identity) => identity.pubkey);
+  const peers = normalizePubkeyList(counterpartPubkeys);
+  if (!cleanId || !selfPubkeys.length || !peers.length) return [];
   const filters = [
     {
       kinds: [config.nostr.kinds.tip],
-      authors: [identity.pubkey],
-      "#p": [counterpartPubkey],
+      authors: selfPubkeys,
+      "#p": peers,
       "#t": [config.nostr.appTag],
-      "#d": [cleanId],
-      "#k": ["submission-chat"],
       limit: config.nostr.privateLoadLimit
     },
     {
       kinds: [config.nostr.kinds.tip],
-      authors: [counterpartPubkey],
-      "#p": [identity.pubkey],
+      authors: peers,
+      "#p": selfPubkeys,
       "#t": [config.nostr.appTag],
-      "#d": [cleanId],
-      "#k": ["submission-chat"],
       limit: config.nostr.privateLoadLimit
     }
   ];
   const events = await queryEvents(filters);
   const messages = [];
   for (const event of events.sort(compareEventAsc)) {
-    const peer = event.pubkey === identity.pubkey ? counterpartPubkey : event.pubkey;
+    const authorPubkey = normalizePubkey(event.pubkey);
+    const recipientPubkey = normalizePubkey(firstTag(event, "p"));
+    const selfIdentity = identities.find((identity) =>
+      identity.pubkey === authorPubkey || identity.pubkey === recipientPubkey
+    );
+    const peer = selfIdentity?.pubkey === authorPubkey ? recipientPubkey : authorPubkey;
+    if (!selfIdentity || !isHex64(peer)) continue;
     try {
-      const payload = parseObject(await nip04.decrypt(identity.secretKey, peer, event.content));
-      if (!payload) continue;
+      const payload = parseObject(await nip04.decrypt(selfIdentity.secretKey, peer, event.content));
+      const payloadSubmissionId = cleanSlug(payload?.submission_id || firstTag(event, "d"));
+      if (!payload || payload.protocol !== protocolName("chat") || payloadSubmissionId !== cleanId) continue;
       messages.push({
         id: event.id,
         author: event.pubkey,
+        recipient_pubkey: recipientPubkey,
         payload,
         event
       });
@@ -380,6 +459,7 @@ async function fetchPublicState() {
           config.nostr.kinds.commentMod,
           config.nostr.kinds.submissionStatus,
           config.nostr.kinds.adminKeyShare,
+          config.nostr.kinds.siteKey,
           config.nostr.kinds.blobRequest,
           config.nostr.kinds.blobFulfillment
         ],
@@ -393,15 +473,12 @@ async function fetchPublicState() {
         limit: Math.max(800, config.nostr.publicLoadLimit * 4)
       }
     ];
-    if (config.nostr.inboxPubkey) {
-      filters.push({
-        kinds: [config.nostr.kinds.tip],
-        "#p": [config.nostr.inboxPubkey],
-        "#t": [config.nostr.appTag],
-        "#k": ["submission"],
-        limit: config.nostr.privateLoadLimit
-      });
-    }
+    filters.push({
+      kinds: [config.nostr.kinds.tip],
+      "#t": [config.nostr.appTag],
+      "#k": ["submission"],
+      limit: config.nostr.privateLoadLimit
+    });
     const events = await queryEvents(filters);
     return buildPublicState(events, seedEntities);
   } catch (error) {
@@ -417,6 +494,7 @@ function buildPublicState(events, seedEntities = []) {
   const submissionStatusEvents = [];
   const snapshotEvents = [];
   const snapshotRequestEvents = [];
+  const siteKeyEvents = [];
   const nameClaims = new Map();
   const profiles = new Map();
   const entities = new Map();
@@ -559,6 +637,23 @@ function buildPublicState(events, seedEntities = []) {
       continue;
     }
 
+    if (kind === config.nostr.kinds.siteKey) {
+      const payload = parseObject(event.content);
+      const sitePubkey = normalizePubkey(payload?.site_pubkey || firstTag(event, "site") || "");
+      if (!isHex64(sitePubkey)) continue;
+      siteKeyEvents.push({
+        event,
+        pubkey: normalizePubkey(event.pubkey),
+        site_pubkey: sitePubkey,
+        previous_site_pubkey: normalizePubkey(payload?.previous_site_pubkey || firstTag(event, "prev") || ""),
+        reason: String(payload?.reason || firstTag(event, "op") || "rotation").trim() || "rotation",
+        rotated_at: String(payload?.rotated_at || "").trim(),
+        created_at: toUnix(event.created_at),
+        id: event.id
+      });
+      continue;
+    }
+
     if (kind === config.nostr.kinds.entity) {
       const payload = parseObject(event.content);
       const slug = cleanSlug(payload?.slug || firstTag(event, "d"));
@@ -687,6 +782,7 @@ function buildPublicState(events, seedEntities = []) {
 
   const adminState = computeAdminState(claims, roles);
   const admins = new Set(adminState.admins);
+  const siteInfo = computeSiteInfo(siteKeyEvents, admins);
   const moderation = computeLatestModeration(userModEvents, admins);
   const commentModeration = computeCommentModeration(commentModEvents, admins);
   const submissionStatuses = computeSubmissionStatuses(submissionStatusEvents, admins);
@@ -773,6 +869,7 @@ function buildPublicState(events, seedEntities = []) {
     error: "",
     rootAdminPubkey: adminState.rootAdminPubkey,
     admins: adminState.admins,
+    siteInfo,
     moderation,
     users,
     entities: entityList,
@@ -833,6 +930,27 @@ function computeAdminState(claims, roles) {
   return {
     rootAdminPubkey,
     admins: [...admins.values()].sort()
+  };
+}
+
+function computeSiteInfo(events, admins) {
+  const fallbackPubkey = resolveConfiguredSitePubkey();
+  const sorted = [...events].sort((left, right) => {
+    if (left.created_at !== right.created_at) return left.created_at - right.created_at;
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+  const history = [];
+  let activePubkey = fallbackPubkey;
+  for (const event of sorted) {
+    if (!admins.has(event.pubkey)) continue;
+    history.push(event);
+    activePubkey = event.site_pubkey;
+  }
+  return {
+    activePubkey: normalizePubkey(activePubkey || fallbackPubkey),
+    fallbackPubkey,
+    latestEvent: history[history.length - 1] || null,
+    events: history.slice().reverse()
   };
 }
 
@@ -949,6 +1067,12 @@ function emptyPublicState(error, seedEntities = []) {
     error: String(error || ""),
     rootAdminPubkey: normalizePubkey(config.nostr.rootAdminPubkey),
     admins: normalizePubkey(config.nostr.rootAdminPubkey) ? [normalizePubkey(config.nostr.rootAdminPubkey)] : [],
+    siteInfo: {
+      activePubkey: resolveConfiguredSitePubkey(),
+      fallbackPubkey: resolveConfiguredSitePubkey(),
+      latestEvent: null,
+      events: []
+    },
     moderation: new Map(),
     users: [],
     entities,
@@ -1168,6 +1292,46 @@ function normalizePubkey(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizePubkeyList(values) {
+  const source = Array.isArray(values) ? values : [values];
+  return [...new Set(source.map((value) => normalizePubkey(value)).filter(isHex64))];
+}
+
+function normalizeSiteKeyShares(input) {
+  const source = Array.isArray(input) ? input : [input];
+  const shares = [];
+  const seen = new Set();
+  for (const item of source) {
+    const secretKeyHex = String(
+      typeof item === "string"
+        ? item
+        : item?.siteSecretKeyHex || item?.secretKeyHex || item?.site_secret_key_hex || ""
+    ).trim().toLowerCase();
+    if (!isHex64(secretKeyHex)) continue;
+    try {
+      const identity = deriveIdentity(secretKeyHex);
+      if (seen.has(identity.pubkey)) continue;
+      seen.add(identity.pubkey);
+      shares.push({
+        siteSecretKeyHex: secretKeyHex,
+        sitePubkey: identity.pubkey,
+        secretKey: identity.secretKey
+      });
+    } catch {
+      continue;
+    }
+  }
+  return shares;
+}
+
+function normalizeThreadIdentities(input) {
+  return normalizeSiteKeyShares(input).map((share) => ({
+    secretKeyHex: share.siteSecretKeyHex,
+    secretKey: share.secretKey,
+    pubkey: share.sitePubkey
+  }));
+}
+
 function firstTag(event, key) {
   const hit = (event.tags || []).find((tag) => Array.isArray(tag) && tag[0] === key);
   return hit ? String(hit[1] || "") : "";
@@ -1225,6 +1389,22 @@ function loadScript(src) {
   });
 }
 
+function bytesToHex(bytes) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hexToBytes(hex) {
+  const clean = String(hex || "").trim().toLowerCase();
+  if (clean.length % 2 !== 0) throw new Error("Hex string must have an even length.");
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let index = 0; index < clean.length; index += 2) {
+    const value = Number.parseInt(clean.slice(index, index + 2), 16);
+    if (!Number.isFinite(value)) throw new Error("Invalid hex byte.");
+    bytes[index / 2] = value;
+  }
+  return bytes;
+}
+
   return {
     getEventTools,
     hasNostrTools,
@@ -1233,12 +1413,16 @@ function loadScript(src) {
     normalizeUsername,
     cleanSlug,
     deriveIdentity,
+    generateSecretKeyHex,
+    resolveSitePubkey,
     loadPublicState,
     publishTaggedJson,
     publishEncryptedJson,
     publishSubmission,
     publishSubmissionChat,
     publishAdminKeyShare,
+    publishSiteKeyEvent,
+    loadAdminKeyShares,
     loadAdminKeyShare,
     loadUserSubmissions,
     loadInboxSubmissions,

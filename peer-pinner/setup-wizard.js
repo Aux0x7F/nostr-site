@@ -39,6 +39,7 @@ const DEFAULTS = {
     adminKeyShare: 34138,
     nameClaim: 34130,
     profile: 34131,
+    siteKey: 34142,
   },
 };
 let eventToolsPromise = null;
@@ -273,7 +274,7 @@ function runGithubChecks({ repo, baseBranch }) {
   if (!installed) {
     recommendations.push("Install the GitHub CLI or set GITHUB_TOKEN explicitly for PR automation.");
   } else if (!authStatus?.ok) {
-    recommendations.push("Run `gh auth login --web --git-protocol https` on the pinner host before enabling PR sync.");
+    recommendations.push("Run `gh auth login --web --git-protocol https --scopes repo` on the pinner host before enabling PR sync.");
   }
   if (installed && authStatus?.ok && scopes.length && !scopes.includes("repo")) {
     recommendations.push("Current gh auth does not expose the classic `repo` scope. Fine-grained auth is acceptable, but it must include Contents write and Pull requests write for the target repo.");

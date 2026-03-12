@@ -10,7 +10,8 @@ import {
   loadUserSubmissions,
   publishTaggedJson,
   publishSubmission,
-  publishSubmissionChat
+  publishSubmissionChat,
+  resolveSitePubkey
 } from "../nostr.js";
 import { getStoredSession } from "../session.js";
 
@@ -357,7 +358,9 @@ async function handleSubmissionSave(form) {
         ? { slug: entity.slug, name: entity.name, location: entity.location, type: entity.type, notes: entity.notes }
         : next.payload.suggested_entity;
     }
-    await publishSubmission(submitState.session.secretKeyHex, next.payload);
+    await publishSubmission(submitState.session.secretKeyHex, next.payload, {
+      sitePubkey: activeSitePubkey()
+    });
     if (status) {
       status.textContent = next.pendingEntity ? "Submission revision and pending entity published." : "Submission revision published.";
       status.dataset.state = "success";
@@ -373,11 +376,11 @@ async function handleSubmissionSave(form) {
 }
 
 async function hydrateChatModal() {
-  if (!submitState.chatModal || !SITE.nostr.inboxPubkey) return;
+  if (!submitState.chatModal || !activeSitePubkey()) return;
   submitState.chatModal.messages = await loadSubmissionThread(
     submitState.session.secretKeyHex,
     submitState.chatModal.submissionId,
-    SITE.nostr.inboxPubkey
+    knownSitePubkeys()
   ).catch(() => []);
   renderSubmitPage();
 }
@@ -386,8 +389,12 @@ async function handleChatSend(form) {
   const formData = new FormData(form);
   const body = String(formData.get("body") || "").trim();
   if (!body) return;
+  const sitePubkey = activeSitePubkey();
+  if (!sitePubkey) {
+    throw new Error("Submission chat is unavailable until a site inbox key is active.");
+  }
   await publishSubmissionChat(submitState.session.secretKeyHex, {
-    targetPubkey: SITE.nostr.inboxPubkey,
+    targetPubkey: sitePubkey,
     submissionId: String(formData.get("submissionId") || ""),
     body,
     role: "submitter"
@@ -436,12 +443,13 @@ async function buildSubmissionDraft(form, existingPayload) {
 
 async function uploadSubmissionAttachment(file) {
   if (!(file instanceof File) || file.size === 0) return null;
-  if (!SITE.nostr.inboxPubkey) {
+  const sitePubkey = activeSitePubkey();
+  if (!sitePubkey) {
     throw new Error("Encrypted attachments require an inbox pubkey.");
   }
   return uploadEncryptedBlob(
     submitState.session.secretKeyHex,
-    SITE.nostr.inboxPubkey,
+    sitePubkey,
     file,
     { purpose: "submission-attachment" }
   );
@@ -611,6 +619,18 @@ function resolveEntityByNameOrSlug(value) {
 function resolveEntityDisplayValue(value) {
   const entity = resolveEntityByNameOrSlug(value);
   return entity?.name || String(value || "");
+}
+
+function activeSitePubkey() {
+  return resolveSitePubkey(submitState.publicState);
+}
+
+function knownSitePubkeys() {
+  return dedupe([
+    activeSitePubkey(),
+    submitState.publicState?.siteInfo?.fallbackPubkey || "",
+    ...((submitState.publicState?.siteInfo?.events || []).map((event) => event.site_pubkey || ""))
+  ]);
 }
 
 function lastCommaValue(value) {
