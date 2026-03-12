@@ -14,6 +14,7 @@ checkExists("support library bundle", "support-lib/dist/nostr-site-support.esm.j
 checkExists("peer pinner bundle", "peer-pinner/dist/peer-pinner.js");
 checkExists("browser smoke harness", "tooling/browser-smoke/package.json");
 checkExists("security checklist", "SECURITY_CHECKLIST.md");
+checkHtmlPolicyMeta();
 
 const siteConfig = readText("scripts/core/site-config.js");
 if (/inboxPubkey:\s*""/.test(siteConfig)) {
@@ -193,6 +194,32 @@ function collectScanFiles(root) {
       if (relative.startsWith("support-lib/dist/")) continue;
       if (relative.startsWith("peer-pinner/dist/")) continue;
       files.push(fullPath);
+    }
+  }
+}
+
+function checkHtmlPolicyMeta() {
+  const htmlFiles = fs
+    .readdirSync(repoRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".html")
+    .map((entry) => path.join(repoRoot, entry.name));
+  for (const file of htmlFiles) {
+    const relative = toRelative(file);
+    const content = fs.readFileSync(file, "utf8");
+    if (content.includes('http-equiv="Content-Security-Policy"')) {
+      passes.push(`HTML policy present in ${relative}`);
+    } else {
+      failures.push(`HTML policy is missing in ${relative}`);
+    }
+    if (content.includes('name="referrer" content="strict-origin-when-cross-origin"')) {
+      passes.push(`referrer policy present in ${relative}`);
+    } else {
+      failures.push(`referrer policy is missing in ${relative}`);
+    }
+    if (content.includes('http-equiv="Permissions-Policy"')) {
+      passes.push(`permissions policy present in ${relative}`);
+    } else {
+      failures.push(`permissions policy is missing in ${relative}`);
     }
   }
 }

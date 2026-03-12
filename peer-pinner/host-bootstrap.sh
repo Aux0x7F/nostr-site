@@ -433,7 +433,7 @@ have_root_access() {
   if [[ "$EUID" -eq 0 ]]; then
     return 0
   fi
-  command -v sudo >/dev/null 2>&1
+  command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1
 }
 
 run_root() {

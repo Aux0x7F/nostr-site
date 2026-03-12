@@ -184,6 +184,7 @@ async function main() {
   }
 
   const envValues = {
+    DATA_DIR: toPortablePath(path.dirname(config.identityFile)),
     IDENTITY_FILE: toPortablePath(config.identityFile),
     PINNER_ALIAS: serviceIdentity.alias,
     ROOT_ADMIN_PUBKEY: config.rootAdminPubkey,

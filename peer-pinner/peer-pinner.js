@@ -10,11 +10,15 @@ const {
   loadOrCreatePeerPinnerIdentity,
 } = require("./identity");
 
-loadLocalEnv(path.join(__dirname, ".env.peer-pinner.local"));
+const RUNTIME_ROOT = path.basename(__dirname) === "dist" ? path.resolve(__dirname, "..") : __dirname;
+const DEFAULT_ENV_FILE = path.join(RUNTIME_ROOT, ".env.peer-pinner.local");
+const DEFAULT_DATA_DIR = path.join(RUNTIME_ROOT, "data");
+
+loadLocalEnv(DEFAULT_ENV_FILE);
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4858);
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
 const EVENTS_FILE = process.env.EVENTS_FILE || path.join(DATA_DIR, "events.ndjson");
 const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "peer-pinner-identity.json");
 const BLOBS_DIR = process.env.BLOBS_DIR || path.join(DATA_DIR, "blobs");

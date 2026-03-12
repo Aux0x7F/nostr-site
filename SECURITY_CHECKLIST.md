@@ -70,6 +70,7 @@ npm run smoke:browser
 
 ## UI and Workflow Safety
 
+- Confirm every public HTML entry page ships with the intended CSP, referrer policy, and permissions policy.
 - Verify anonymous visitors only get guest-level public actions.
 - Verify sign-in-gated flows stay gated in the live UI.
 - Verify admin-only moderation, status changes, and publishing actions are role-checked in the live UI.

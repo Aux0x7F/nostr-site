@@ -80,6 +80,8 @@ The Linux host bootstrap script will:
 - register a restartable `systemd` service, either system-level or user-level depending on available privileges
 - write an `update-peer-pinner.sh` helper so rerunning the bootstrap is the update path
 
+If the operator does not have noninteractive root access, the bootstrap falls back to a user service and skips `loginctl enable-linger`. In that case, enable linger manually if the service must survive logout/reboot.
+
 The Windows host bootstrap script will:
 
 - install `node`, `gh`, and `git` via `winget` if they are missing
@@ -93,6 +95,7 @@ The setup wizard will:
 
 - create or reuse a pinner service identity under `peer-pinner/data/`
 - write local runtime config to `peer-pinner/.env.peer-pinner.local`
+- pin the runtime data root to `peer-pinner/data/` so bundled runs do not drift into `dist/data/`
 - inspect relay state to decide between `new-site`, `site-bootstrap`, and `needs-root-selection`
 - read checked-in defaults from `scripts/core/site-config.js` and `CNAME` when a repo dir is present
 - check GitHub CLI install/auth and repo visibility
