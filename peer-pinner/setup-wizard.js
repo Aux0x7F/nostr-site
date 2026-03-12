@@ -30,6 +30,7 @@ const DEFAULTS = {
   repoDir: String(process.env.SNAPSHOT_REPO_DIR || "").trim(),
   repo: String(process.env.GITHUB_REPO || "").trim(),
   baseBranch: String(process.env.GITHUB_BASE_BRANCH || "main").trim() || "main",
+  branchPrefix: String(process.env.GITHUB_BRANCH_PREFIX || "nostr-site-bake").trim() || "nostr-site-bake",
   rootAdminPubkey: String(process.env.ROOT_ADMIN_PUBKEY || "").trim().toLowerCase(),
   relays: parseRelays(process.env.UPSTREAM_RELAYS || ""),
   clientName: "nostr-site-peer-pinner",
@@ -64,6 +65,7 @@ async function main() {
     repoDir: String(args.repoDir || DEFAULTS.repoDir || "").trim(),
     repo: String(args.repo || DEFAULTS.repo || "").trim(),
     baseBranch: String(args.baseBranch || DEFAULTS.baseBranch || "main").trim() || "main",
+    branchPrefix: String(args.branchPrefix || DEFAULTS.branchPrefix || "nostr-site-bake").trim() || "nostr-site-bake",
     rootAdminPubkey: "",
     relays: parseRelays(args.relays || DEFAULTS.relays.join(",")),
     checkOnly: Boolean(args.checkOnly),
@@ -117,7 +119,10 @@ async function main() {
 
   const github = runGithubChecks({
     repo: config.repo,
+    repoDir: config.repoDir,
     baseBranch: config.baseBranch,
+    branchPrefix: config.branchPrefix,
+    appTag: config.appTag,
   });
 
   if (config.checkOnly) {
@@ -187,6 +192,7 @@ async function main() {
     SNAPSHOT_REPO_DIR: toPortablePath(config.repoDir),
     GITHUB_REPO: config.repo,
     GITHUB_BASE_BRANCH: config.baseBranch,
+    GITHUB_BRANCH_PREFIX: config.branchPrefix,
     GIT_REMOTE: config.gitRemote,
   };
   writeEnvFile(config.envFile, envValues);
@@ -245,6 +251,7 @@ async function promptForMissingValues(config, relayState, bootstrapMode, repoDef
     config.repoDir = await promptValue(rl, "Snapshot repo dir", config.repoDir);
     config.repo = await promptValue(rl, "GitHub repo (owner/repo)", config.repo);
     config.baseBranch = await promptValue(rl, "GitHub base branch", config.baseBranch);
+    config.branchPrefix = await promptValue(rl, "Bakedown branch prefix", config.branchPrefix);
     config.siteDomain = await promptValue(rl, "Site domain", config.siteDomain || repoDefaults.siteDomain || "");
     if (!config.rootAdminPubkey && relayState.rootAdminPubkey) {
       console.log(`Observed root admin from relay state: ${relayState.rootAdminPubkey}`);
@@ -264,17 +271,27 @@ async function promptForMissingValues(config, relayState, bootstrapMode, repoDef
   }
 }
 
-function runGithubChecks({ repo, baseBranch }) {
+function runGithubChecks({ repo, repoDir, baseBranch, branchPrefix, appTag }) {
   const ghVersion = runCommand("gh", ["--version"]);
   const installed = ghVersion.ok;
   const authStatus = installed ? runCommand("gh", ["auth", "status", "-h", "github.com"]) : null;
   const scopes = installed && authStatus?.ok ? inspectGithubScopes() : [];
   const repoCheck = installed && authStatus?.ok && repo ? inspectGithubRepo(repo, baseBranch) : null;
   const recommendations = [];
+  const bakeBranch = buildBakeBranchName(branchPrefix, appTag);
   if (!installed) {
     recommendations.push("Install the GitHub CLI or set GITHUB_TOKEN explicitly for PR automation.");
   } else if (!authStatus?.ok) {
     recommendations.push("Run `gh auth login --web --git-protocol https --scopes repo` on the pinner host before enabling PR sync.");
+  }
+  if (repo && !repoDir) {
+    recommendations.push("Set SNAPSHOT_REPO_DIR to the checked-out site repo before enabling PR automation.");
+  }
+  if (repo && !/^[^/\s]+\/[^/\s]+$/.test(repo)) {
+    recommendations.push("GITHUB_REPO should use owner/repo format.");
+  }
+  if (sanitizeBranchSegment(baseBranch) === bakeBranch) {
+    recommendations.push("Bakedown branch currently resolves to the same name as the base branch. Change GITHUB_BRANCH_PREFIX or APP_TAG.");
   }
   if (installed && authStatus?.ok && scopes.length && !scopes.includes("repo")) {
     recommendations.push("Current gh auth does not expose the classic `repo` scope. Fine-grained auth is acceptable, but it must include Contents write and Pull requests write for the target repo.");
@@ -288,6 +305,7 @@ function runGithubChecks({ repo, baseBranch }) {
     authenticated: Boolean(authStatus?.ok),
     auth_detail: authStatus ? trimBlock([authStatus.stdout, authStatus.stderr].filter(Boolean).join("\n")) : "",
     scopes,
+    bake_branch: bakeBranch,
     repo: repoCheck,
     recommendations,
   };
@@ -461,6 +479,7 @@ function printCheckSummary(config, github, relayState, repoDefaults, bootstrapMo
   console.log(`- gh authenticated: ${github.authenticated ? "yes" : "no"}`);
   if (github.version) console.log(`- gh version: ${github.version}`);
   if (github.scopes.length) console.log(`- gh scopes: ${github.scopes.join(", ")}`);
+  if (github.bake_branch) console.log(`- bakedown branch: ${github.bake_branch}`);
   if (github.repo) {
     console.log(`- repo access: ${github.repo.ok ? "ok" : "failed"} (${github.repo.repo})`);
     if (github.repo.default_branch) console.log(`- repo default branch: ${github.repo.default_branch}`);
@@ -494,6 +513,20 @@ function printSetupSummary(summary) {
   for (const note of summary.notes) {
     console.log(`- note: ${note}`);
   }
+}
+
+function buildBakeBranchName(branchPrefix, appTag) {
+  return `${sanitizeBranchSegment(branchPrefix)}/${sanitizeBranchSegment(appTag)}`;
+}
+
+function sanitizeBranchSegment(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, "-")
+    .replace(/\/+/g, "/")
+    .replace(/^-+|-+$/g, "")
+    .replace(/^\/+|\/+$/g, "") || "snapshot";
 }
 
 function writeEnvFile(filePath, values) {

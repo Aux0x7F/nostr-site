@@ -15,6 +15,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - admin-requested seed bakedowns with optional GitHub PR sync via peer pinner
 - site-key rotation events with re-shared admin inbox access
 - lightweight browser smoke tests under `tooling/browser-smoke`
+- a repeatable production hardening checklist in `SECURITY_CHECKLIST.md`
 
 ## Structure
 
@@ -119,7 +120,10 @@ Anonymous visitors can still participate in public cache refreshes through a per
 npm install
 npm run build
 npm run build:support-lib
+npm run audit:security
 ```
+
+`npm run release:check` runs the build plus the static security audit. For an actual deployment, run the live browser smoke suite separately with real `SMOKE_*` environment values.
 
 ## Peer pinner package
 
@@ -155,3 +159,12 @@ That is the path `truecost` should move onto once `nostr-site` is pushed and the
 ## Browser smoke harness
 
 `tooling/browser-smoke/` contains a small Playwright suite for live deployed sites. It is intended for admin/login/submission/comment smoke coverage against a real URL, not as part of the shipped client bundle.
+
+## Production hardening
+
+Use `SECURITY_CHECKLIST.md` as the release gate. The short version is:
+
+1. `npm run release:check`
+2. run the live browser smoke suite against the deployed site
+3. review GitHub branch/PR-only permissions and pinner host config
+4. verify the admin revoke / rotation path on the live environment

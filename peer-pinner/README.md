@@ -30,6 +30,13 @@ npm install
 npm run build
 ```
 
+Before a production release from this runtime, also run the repo-level audit gate from the repo root:
+
+```bash
+cd ..
+npm run audit:security
+```
+
 ## Setup wizard
 
 Run the local wizard on the pinner host:
@@ -178,6 +185,12 @@ If you do not want that fallback:
 - or configure a real credential store such as `pass` or a running Secret Service / keyring daemon for the service user before running `gh auth login`
 
 Avoid direct deploy-branch write authority unless you intentionally want the pinner to be root-equivalent.
+
+The runtime now refuses obviously unsafe bakedown GitHub config at startup, including:
+
+- invalid `GITHUB_REPO`
+- `GITHUB_REPO` configured without `SNAPSHOT_REPO_DIR`
+- a bakedown branch that resolves to the same name as the base branch
 
 ## Blob workflow
 

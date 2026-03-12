@@ -6,7 +6,11 @@
   "scripts": {
     "build": "node build.mjs",
     "build:support-lib": "node support-lib/build.mjs",
-    "build:all": "npm run build && npm run build:support-lib && npm --prefix peer-pinner run build"
+    "build:all": "npm run build && npm run build:support-lib && npm --prefix peer-pinner run build",
+    "audit:security": "node tooling/security-audit/audit.mjs",
+    "audit:security:strict": "node tooling/security-audit/audit.mjs --strict",
+    "smoke:browser": "npm --prefix tooling/browser-smoke test",
+    "release:check": "npm run build:all && npm run audit:security"
   },
   "devDependencies": {
     "esbuild": "^0.25.1",

@@ -69,6 +69,7 @@ if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
 if (ROOT_ADMIN_PUBKEY && !isHex64(ROOT_ADMIN_PUBKEY)) {
   throw new Error(`invalid ROOT_ADMIN_PUBKEY ${process.env.ROOT_ADMIN_PUBKEY}`);
 }
+validateGithubSnapshotConfig();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
@@ -1615,6 +1616,20 @@ function ensureGitRepoRoot(repoDir) {
   const root = runGit(repoDir, ["rev-parse", "--show-toplevel"]).trim();
   if (!root) throw new Error("git repo root not found");
   return root;
+}
+
+function validateGithubSnapshotConfig() {
+  if (GITHUB_REPO && !/^[^/\s]+\/[^/\s]+$/.test(GITHUB_REPO)) {
+    throw new Error(`invalid GITHUB_REPO ${GITHUB_REPO}`);
+  }
+  if (GITHUB_REPO && !SNAPSHOT_REPO_DIR) {
+    throw new Error("SNAPSHOT_REPO_DIR is required when GITHUB_REPO is configured.");
+  }
+  const baseBranch = sanitizeBranchSegment(GITHUB_BASE_BRANCH);
+  const bakeBranch = buildBakeBranchName();
+  if (bakeBranch === baseBranch) {
+    throw new Error(`unsafe bakedown branch ${bakeBranch}: it matches the base branch.`);
+  }
 }
 
 function buildBakeBranchName() {
