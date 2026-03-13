@@ -265,13 +265,18 @@ async function initBlogCards() {
 
 async function initAuthoringEntry() {
   const host = document.querySelector("[data-authoring-entry]");
-  if (!host) return;
+  const panel = document.querySelector("[data-authoring-panel]");
+  if (!host && !panel) return;
+  if (panel instanceof HTMLElement) panel.hidden = true;
   const publicState = await getPublicState();
   if (!editorEntryAllowed(publicState)) {
-    host.innerHTML = "";
+    if (host instanceof HTMLElement) host.innerHTML = "";
     return;
   }
-  host.innerHTML = `<a class="button" href="./editor.html">Create post</a>`;
+  if (host instanceof HTMLElement) {
+    host.innerHTML = `<a class="button" href="./editor.html">Create post</a>`;
+  }
+  if (panel instanceof HTMLElement) panel.hidden = false;
 }
 
 async function initPostDetail() {
