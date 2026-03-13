@@ -35,12 +35,17 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function initEditorPage(force = false) {
+  editorState.session = getStoredSession();
+  editorState.viewer = null;
+  if (!editorState.session) {
+    editorState.publicState = editorState.publicState || { admins: [] };
+    editorState.staticSlugs = [];
+    renderEditorShell();
+    return;
+  }
   renderEditorLoading("Looking up editor...");
   await ensureEventToolsLoaded();
-  editorState.session = getStoredSession();
-  editorState.viewer = editorState.session
-    ? deriveIdentity(editorState.session.secretKeyHex)
-    : null;
+  editorState.viewer = deriveIdentity(editorState.session.secretKeyHex);
   editorState.publicState = await loadPublicState(force);
   editorState.staticSlugs = await loadStaticSlugs().catch(() => []);
   renderEditorShell();
