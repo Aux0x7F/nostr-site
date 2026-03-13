@@ -117,24 +117,8 @@ export function createDeterministicSessionApi(config, deps) {
   async function rebroadcastAccount(session, profile = {}) {
     if (!session?.secretKeyHex || !session?.username) return null;
     const username = normalizeUsername(session.username);
-    await publishTaggedJson({
-      kind: config.nostr.kinds.nameClaim,
-      secretKeyHex: session.secretKeyHex,
-      tags: [["d", `user:${username}`], ["u", username]],
-      content: {
-        username,
-        username_normalized: username
-      }
-    });
-
-    if (
-      profile.displayName ||
-      profile.avatarUrl ||
-      profile.avatarBlob ||
-      profile.bio ||
-      (Array.isArray(profile.socialLinks) && profile.socialLinks.length)
-    ) {
-      await publishTaggedJson({
+    const publishProfile = () =>
+      publishTaggedJson({
         kind: config.nostr.kinds.profile,
         secretKeyHex: session.secretKeyHex,
         tags: [["d", "profile"]],
@@ -149,6 +133,28 @@ export function createDeterministicSessionApi(config, deps) {
             : []
         }
       });
+    const publishClaim = () =>
+      publishTaggedJson({
+        kind: config.nostr.kinds.nameClaim,
+        secretKeyHex: session.secretKeyHex,
+        tags: [["d", `user:${username}`], ["u", username]],
+        content: {
+          username,
+          username_normalized: username
+        }
+      });
+
+    let claimResult = await publishClaim();
+    let profileResult = await publishProfile();
+
+    if (!claimResult.ok && !profileResult.ok) {
+      await delay(900);
+      claimResult = await publishClaim();
+      profileResult = await publishProfile();
+    }
+
+    if (!claimResult.ok && !profileResult.ok) {
+      throw new Error("Could not reach any relay for this account update.");
     }
 
     return session;
@@ -209,4 +215,8 @@ async function randomGuestId() {
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
   return `guest-${bytesToHex(bytes)}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, Number(ms) || 0));
 }

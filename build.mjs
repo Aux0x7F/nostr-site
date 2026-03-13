@@ -16,6 +16,7 @@ const htmlFiles = [
   "index.html",
   "blog.html",
   "post.html",
+  "editor.html",
   "investigations.html",
   "investigation.html",
   "guide.html",
@@ -27,7 +28,7 @@ const htmlFiles = [
   "merch.html"
 ];
 
-for (const entry of ["app.js", "admin.js", "submit.js"]) {
+for (const entry of ["app.js", "admin.js", "submit.js", "editor.js"]) {
   await esbuild.build({
     entryPoints: [path.join(root, "scripts", entry)],
     bundle: true,

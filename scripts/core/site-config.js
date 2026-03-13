@@ -28,10 +28,12 @@ export const SITE = Object.freeze({
     protocolPrefix: "nostr-site",
     storageNamespace: "nostrsite.template",
     relays: ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"],
+    authorityRelays: ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"],
     inboxPubkey: "",
     rootAdminPubkey: "",
     maxAttachmentBytes: 90000,
     connectTimeoutMs: 3200,
+    authorityConnectTimeoutMs: 6500,
     privateLoadLimit: 200,
     publicLoadLimit: 400,
     filterChunkSize: 12,
@@ -57,7 +59,8 @@ export const SITE = Object.freeze({
       blobRequest: 34139,
       blobFulfillment: 34140,
       visitPulse: 34141,
-      siteKey: 34142
+      siteKey: 34142,
+      adminKeyRequest: 34143
     }
   }
 });

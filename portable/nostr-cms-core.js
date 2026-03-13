@@ -96,6 +96,46 @@ function resolveSitePubkey(publicState = null) {
   return normalizePubkey(publicState?.siteInfo?.activePubkey || resolveConfiguredSitePubkey());
 }
 
+function normalizeRelayList(values, fallback = []) {
+  const source = Array.isArray(values) && values.length ? values : fallback;
+  return [...new Set(source.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function publicRelayList() {
+  return normalizeRelayList(config?.nostr?.relays || []);
+}
+
+function authorityRelayList() {
+  return normalizeRelayList(config?.nostr?.authorityRelays, publicRelayList());
+}
+
+function combinedAuthorityRelayList() {
+  return normalizeRelayList([...authorityRelayList(), ...publicRelayList()]);
+}
+
+function authorityConnectTimeoutMs() {
+  const value = Number(config?.nostr?.authorityConnectTimeoutMs || config?.nostr?.connectTimeoutMs || 3200);
+  return Number.isFinite(value) && value > 0 ? value : 3200;
+}
+
+function isAuthorityKind(kind) {
+  return new Set([
+    config?.nostr?.kinds?.adminClaim,
+    config?.nostr?.kinds?.adminRole,
+    config?.nostr?.kinds?.userMod,
+    config?.nostr?.kinds?.nameClaim,
+    config?.nostr?.kinds?.profile,
+    config?.nostr?.kinds?.snapshotRequest,
+    config?.nostr?.kinds?.adminKeyRequest,
+    config?.nostr?.kinds?.siteKey,
+    config?.nostr?.kinds?.adminKeyShare
+  ]).has(Number(kind));
+}
+
+function publishRelayListForKind(kind) {
+  return isAuthorityKind(kind) ? combinedAuthorityRelayList() : publicRelayList();
+}
+
 async function generateSecretKeyHex() {
   await ensureEventToolsLoaded();
   let attempt = 0;
@@ -124,6 +164,8 @@ async function publishTaggedJson({ kind, secretKeyHex, tags = [], content = {} }
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { SimplePool, finalizeEvent } = tools;
   const identity = deriveIdentity(secretKeyHex);
+  const relays = publishRelayListForKind(kind);
+  if (!relays.length) throw new Error("No relays are configured for this event.");
   const event = finalizeEvent(
     {
       kind,
@@ -135,8 +177,8 @@ async function publishTaggedJson({ kind, secretKeyHex, tags = [], content = {} }
   );
 
   const pool = new SimplePool();
-  const results = await Promise.allSettled(pool.publish(config.nostr.relays, event));
-  pool.close(config.nostr.relays);
+  const results = await Promise.allSettled(pool.publish(relays, event));
+  pool.close(relays);
 
   return {
     event,
@@ -156,6 +198,8 @@ async function publishEncryptedJson({
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { SimplePool, finalizeEvent, nip04 } = tools;
   const identity = deriveIdentity(secretKeyHex);
+  const relays = publishRelayListForKind(kind);
+  if (!relays.length) throw new Error("No relays are configured for this event.");
   const payload = typeof content === "string" ? content : JSON.stringify(content);
   const event = finalizeEvent(
     {
@@ -168,8 +212,8 @@ async function publishEncryptedJson({
   );
 
   const pool = new SimplePool();
-  const results = await Promise.allSettled(pool.publish(config.nostr.relays, event));
-  pool.close(config.nostr.relays);
+  const results = await Promise.allSettled(pool.publish(relays, event));
+  pool.close(relays);
 
   return {
     event,
@@ -230,6 +274,21 @@ async function publishAdminKeyShare(secretKeyHex, targetPubkey, siteSecretKeyHex
   });
 }
 
+async function publishAdminKeyRequest(secretKeyHex, sitePubkey = "") {
+  const targetSitePubkey = normalizePubkey(sitePubkey || resolveConfiguredSitePubkey());
+  if (!isHex64(targetSitePubkey)) throw new Error("A valid site inbox key is not available.");
+  return publishTaggedJson({
+    kind: config.nostr.kinds.adminKeyRequest,
+    secretKeyHex,
+    tags: [["d", `site-key-request:${targetSitePubkey}`], ["site", targetSitePubkey], ["op", "request"]],
+    content: {
+      protocol: protocolName("admin-key-request"),
+      site_pubkey: targetSitePubkey,
+      requested_at: new Date().toISOString()
+    }
+  });
+}
+
 async function publishSiteKeyEvent(secretKeyHex, siteSecretKeyHex, options = {}) {
   if (!config.nostr.kinds.siteKey) throw new Error("Site key events are not configured.");
   const siteIdentity = deriveIdentity(siteSecretKeyHex);
@@ -267,7 +326,7 @@ async function loadAdminKeyShares(secretKeyHex) {
       "#t": [config.nostr.appTag],
       limit: config.nostr.privateLoadLimit
     }
-  ]);
+  ], { relays: combinedAuthorityRelayList(), timeoutMs: authorityConnectTimeoutMs() });
   const shares = new Map();
   for (const event of events.sort(compareEventDesc)) {
     try {
@@ -296,6 +355,63 @@ async function loadAdminKeyShare(secretKeyHex, sitePubkey = "") {
   const targetSitePubkey = normalizePubkey(sitePubkey || "");
   if (!targetSitePubkey) return shares[0] || null;
   return shares.find((share) => share.sitePubkey === targetSitePubkey) || null;
+}
+
+async function lookupUsers(query) {
+  const raw = String(query || "").trim();
+  if (!raw) return [];
+  const relays = combinedAuthorityRelayList();
+  if (!relays.length) return [];
+  const timeoutMs = authorityConnectTimeoutMs();
+  const pubkey = normalizePubkey(raw);
+  const username = normalizeUsername(raw);
+  let events = [];
+
+  if (isHex64(pubkey)) {
+    events = await queryEvents(
+      [
+        {
+          kinds: [config.nostr.kinds.nameClaim, config.nostr.kinds.profile],
+          authors: [pubkey],
+          "#t": [config.nostr.appTag],
+          limit: 12
+        }
+      ],
+      { relays, timeoutMs }
+    );
+  } else if (username) {
+    const claimEvents = await queryEvents(
+      [
+        {
+          kinds: [config.nostr.kinds.nameClaim],
+          "#u": [username],
+          "#t": [config.nostr.appTag],
+          limit: 24
+        }
+      ],
+      { relays, timeoutMs }
+    );
+    const pubkeys = [...new Set(claimEvents.map((event) => normalizePubkey(event.pubkey)).filter(Boolean))];
+    const profileEvents = pubkeys.length
+      ? await queryEvents(
+          [
+            {
+              kinds: [config.nostr.kinds.profile],
+              authors: pubkeys,
+              "#t": [config.nostr.appTag],
+              limit: Math.max(24, pubkeys.length * 2)
+            }
+          ],
+          { relays, timeoutMs }
+        )
+      : [];
+    events = [...claimEvents, ...profileEvents];
+  }
+
+  const matchedPubkeys = new Set(events.map((event) => normalizePubkey(event.pubkey)).filter(Boolean));
+  if (!matchedPubkeys.size) return [];
+  const state = buildPublicState(events, []);
+  return state.users.filter((user) => matchedPubkeys.has(user.pubkey));
 }
 
 async function loadUserSubmissions(secretKeyHex) {
@@ -445,13 +561,14 @@ async function fetchPublicState() {
     const visitSince = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30;
     const publicLimit = Number(config.nostr.publicLoadLimit || 400);
     const privateLimit = Number(config.nostr.privateLoadLimit || 200);
-    const filters = [
+    const authorityFilters = [
       {
         kinds: [
           config.nostr.kinds.adminClaim,
           config.nostr.kinds.adminRole,
           config.nostr.kinds.userMod,
           config.nostr.kinds.snapshotRequest,
+          config.nostr.kinds.adminKeyRequest,
           config.nostr.kinds.siteKey
         ],
         "#t": [config.nostr.appTag],
@@ -466,6 +583,13 @@ async function fetchPublicState() {
         limit: Math.max(200, publicLimit)
       },
       {
+        kinds: [config.nostr.kinds.adminKeyShare],
+        "#t": [config.nostr.appTag],
+        limit: Math.max(120, Math.ceil(publicLimit / 2))
+      }
+    ];
+    const contentFilters = [
+      {
         kinds: [
           config.nostr.kinds.snapshot,
           config.nostr.kinds.entity,
@@ -473,7 +597,6 @@ async function fetchPublicState() {
           config.nostr.kinds.comment,
           config.nostr.kinds.commentMod,
           config.nostr.kinds.submissionStatus,
-          config.nostr.kinds.adminKeyShare,
           config.nostr.kinds.blobRequest,
           config.nostr.kinds.blobFulfillment
         ],
@@ -487,14 +610,23 @@ async function fetchPublicState() {
         limit: Math.max(800, publicLimit * 4)
       }
     ];
-    filters.push({
+    contentFilters.push({
       kinds: [config.nostr.kinds.tip],
       "#t": [config.nostr.appTag],
       "#k": ["submission"],
       limit: privateLimit
     });
-    const events = await queryEvents(filters);
-    return buildPublicState(events, seedEntities);
+    const [authorityEvents, contentEvents] = await Promise.all([
+      queryEvents(authorityFilters, {
+        relays: combinedAuthorityRelayList(),
+        timeoutMs: authorityConnectTimeoutMs()
+      }),
+      queryEvents(contentFilters, {
+        relays: publicRelayList(),
+        timeoutMs: Number(config.nostr.connectTimeoutMs || 3200)
+      })
+    ]);
+    return buildPublicState([...authorityEvents, ...contentEvents], seedEntities);
   } catch (error) {
     return emptyPublicState(String(error?.message || error || "Relay timeout."), seedEntities);
   }
@@ -508,11 +640,13 @@ function buildPublicState(events, seedEntities = []) {
   const submissionStatusEvents = [];
   const snapshotEvents = [];
   const snapshotRequestEvents = [];
+  const adminKeyRequestEvents = [];
   const siteKeyEvents = [];
+  const adminKeyShareEvents = new Map();
   const nameClaims = new Map();
   const profiles = new Map();
   const entities = new Map();
-  const drafts = new Map();
+  const draftEventsBySlug = new Map();
   const comments = new Map();
   const blobRequests = new Map();
   const blobFulfillments = new Map();
@@ -651,6 +785,21 @@ function buildPublicState(events, seedEntities = []) {
       continue;
     }
 
+    if (kind === config.nostr.kinds.adminKeyRequest) {
+      const payload = parseObject(event.content);
+      const sitePubkey = normalizePubkey(payload?.site_pubkey || firstTag(event, "site") || "");
+      if (!isHex64(sitePubkey)) continue;
+      adminKeyRequestEvents.push({
+        event,
+        id: event.id,
+        requester_pubkey: normalizePubkey(event.pubkey),
+        site_pubkey: sitePubkey,
+        requested_at: String(payload?.requested_at || "").trim(),
+        created_at: toUnix(event.created_at)
+      });
+      continue;
+    }
+
     if (kind === config.nostr.kinds.siteKey) {
       const payload = parseObject(event.content);
       const sitePubkey = normalizePubkey(payload?.site_pubkey || firstTag(event, "site") || "");
@@ -664,6 +813,21 @@ function buildPublicState(events, seedEntities = []) {
         rotated_at: String(payload?.rotated_at || "").trim(),
         created_at: toUnix(event.created_at),
         id: event.id
+      });
+      continue;
+    }
+
+    if (kind === config.nostr.kinds.adminKeyShare) {
+      const recipientPubkey = normalizePubkey(firstTag(event, "p"));
+      const sitePubkey = normalizePubkey(firstTag(event, "site"));
+      if (!isHex64(recipientPubkey) || !isHex64(sitePubkey)) continue;
+      mergeLatest(adminKeyShareEvents, `${recipientPubkey}:${sitePubkey}`, {
+        event,
+        id: event.id,
+        recipient_pubkey: recipientPubkey,
+        site_pubkey: sitePubkey,
+        shared_by: normalizePubkey(event.pubkey),
+        created_at: toUnix(event.created_at)
       });
       continue;
     }
@@ -713,7 +877,9 @@ function buildPublicState(events, seedEntities = []) {
         id: event.id,
         _event: event
       };
-      mergeLatest(drafts, slug, next);
+      const revisions = draftEventsBySlug.get(slug) || [];
+      revisions.push(next);
+      draftEventsBySlug.set(slug, revisions);
       continue;
     }
 
@@ -804,6 +970,24 @@ function buildPublicState(events, seedEntities = []) {
   const moderation = computeLatestModeration(userModEvents, admins);
   const commentModeration = computeCommentModeration(commentModEvents, admins);
   const submissionStatuses = computeSubmissionStatuses(submissionStatusEvents, admins);
+  const pendingAdminKeyRequests = computePendingAdminKeyRequests(
+    adminKeyRequestEvents,
+    adminKeyShareEvents,
+    admins,
+    siteInfo.activePubkey
+  );
+  const draftHistoryBySlug = new Map();
+  const draftList = [...draftEventsBySlug.entries()]
+    .map(([slug, revisions]) => {
+      const ordered = revisions.slice().sort(compareEventDesc);
+      draftHistoryBySlug.set(slug, ordered);
+      return {
+        ...ordered[0],
+        revisions: ordered,
+        revisionCount: ordered.length
+      };
+    })
+    .sort((left, right) => compareEventDesc(left._event, right._event));
 
   const mergedEntities = new Map();
   for (const entity of Array.isArray(seedEntities) ? seedEntities : []) {
@@ -892,7 +1076,10 @@ function buildPublicState(events, seedEntities = []) {
     users,
     entities: entityList,
     approvedEntities: entityList.filter((entity) => entity.status === "approved"),
-    drafts: [...drafts.values()].sort((left, right) => right.date.localeCompare(left.date)),
+    drafts: draftList,
+    draftHistoryBySlug,
+    pendingAdminKeyRequests,
+    adminKeyShareMetadata: [...adminKeyShareEvents.values()].sort((left, right) => compareEventDesc(left.event, right.event)),
     allComments,
     comments: visibleComments,
     hiddenComments,
@@ -1027,6 +1214,17 @@ function computeSubmissionStatuses(events, admins) {
   return map;
 }
 
+function computePendingAdminKeyRequests(requests, shareMetadata, admins, activeSitePubkey) {
+  const targetSitePubkey = normalizePubkey(activeSitePubkey || "");
+  const sorted = [...requests].sort((left, right) => compareEventDesc(left.event, right.event));
+  return sorted.filter((request) => {
+    if (!admins.has(request.requester_pubkey)) return false;
+    if (targetSitePubkey && request.site_pubkey !== targetSitePubkey) return false;
+    const lastShare = shareMetadata.get(`${request.requester_pubkey}:${request.site_pubkey}`) || null;
+    return !lastShare || lastShare.created_at < request.created_at;
+  });
+}
+
 function computeVisitMetrics(events) {
   const sorted = [...events].sort(compareEventAsc);
   const now = Math.floor(Date.now() / 1000);
@@ -1096,6 +1294,9 @@ function emptyPublicState(error, seedEntities = []) {
     entities,
     approvedEntities,
     drafts: [],
+    draftHistoryBySlug: new Map(),
+    pendingAdminKeyRequests: [],
+    adminKeyShareMetadata: [],
     allComments: [],
     comments: [],
     hiddenComments: [],
@@ -1162,10 +1363,13 @@ function normalizeSeedEntity(payload) {
   };
 }
 
-async function queryEvents(filters) {
+async function queryEvents(filters, options = {}) {
   const tools = getEventTools();
   if (!tools) throw new Error("Nostr tools unavailable.");
   const { SimplePool } = tools;
+  const relays = normalizeRelayList(options.relays, publicRelayList());
+  if (!relays.length) return [];
+  const timeoutMs = Number(options.timeoutMs || config.nostr.connectTimeoutMs || 3200);
   const pool = new SimplePool();
   try {
     const normalized = expandQueryFilters(
@@ -1173,7 +1377,7 @@ async function queryEvents(filters) {
     );
     const results = await Promise.allSettled(
       normalized.map((filter) =>
-        withTimeout(pool.querySync(config.nostr.relays, filter, {}), config.nostr.connectTimeoutMs)
+        withTimeout(pool.querySync(relays, filter, {}), timeoutMs)
       )
     );
     const merged = new Map();
@@ -1185,7 +1389,7 @@ async function queryEvents(filters) {
     }
     return [...merged.values()];
   } finally {
-    pool.close(config.nostr.relays);
+    pool.close(relays);
   }
 }
 
@@ -1499,9 +1703,11 @@ function hexToBytes(hex) {
     publishSubmission,
     publishSubmissionChat,
     publishAdminKeyShare,
+    publishAdminKeyRequest,
     publishSiteKeyEvent,
     loadAdminKeyShares,
     loadAdminKeyShare,
+    lookupUsers,
     loadUserSubmissions,
     loadInboxSubmissions,
     loadSubmissionThread
