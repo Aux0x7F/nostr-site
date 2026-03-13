@@ -7,7 +7,6 @@ import {
   ensureEventToolsLoaded,
   generateSecretKeyHex,
   loadAdminKeyShares,
-  loadAdminKeyShare,
   loadInboxSubmissions,
   loadPublicState,
   lookupUsers,
@@ -246,15 +245,15 @@ async function hydrateWorkspaceState(force = false) {
     ? deriveIdentity(workspaceState.session.secretKeyHex)
     : null;
   workspaceState.publicState = await loadPublicState(force);
-  workspaceState.siteKeyShares = workspaceState.session
+  const remoteShares = workspaceState.session
     ? await loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
     : [];
-  workspaceState.siteKeyShare = workspaceState.session
-    ? await loadAdminKeyShare(
-        workspaceState.session.secretKeyHex,
-        resolveSitePubkey(workspaceState.publicState)
-      ).catch(() => null)
-    : null;
+  workspaceState.siteKeyShares = mergeSiteKeyShares(remoteShares, loadCachedSiteKeyShares());
+  persistCachedSiteKeyShares(workspaceState.siteKeyShares);
+  workspaceState.siteKeyShare = findSiteKeyShareInList(
+    workspaceState.siteKeyShares,
+    resolveSitePubkey(workspaceState.publicState)
+  );
 }
 
 function captureWorkspaceAccessState() {
@@ -1932,8 +1931,11 @@ async function rotateSiteInboxKey(excludedPubkeys = [], reason = "rotation") {
   }
   const nextSiteSecretKeyHex = await generateSecretKeyHex();
   const previousSitePubkey = activeSitePubkey();
+  const sharedAt = new Date().toISOString();
   const recipients = dedupe(
-    (workspaceState.publicState?.admins || []).filter((pubkey) => !excludedPubkeys.includes(pubkey))
+    (workspaceState.publicState?.admins || []).filter(
+      (pubkey) => !excludedPubkeys.includes(pubkey) && pubkey !== workspaceState.viewer?.pubkey
+    )
   );
   await publishSiteKeyEvent(workspaceState.session.secretKeyHex, nextSiteSecretKeyHex, {
     previousSitePubkey,
@@ -1945,6 +1947,20 @@ async function rotateSiteInboxKey(excludedPubkeys = [], reason = "rotation") {
       pubkey,
       nextSiteSecretKeyHex
     );
+  }
+  const currentShare = buildCachedSiteKeyShare(nextSiteSecretKeyHex, {
+    senderPubkey: workspaceState.viewer?.pubkey || "",
+    sharedAt
+  });
+  workspaceState.siteKeyShares = mergeSiteKeyShares([currentShare, ...workspaceState.siteKeyShares], []);
+  workspaceState.siteKeyShare = currentShare;
+  persistCachedSiteKeyShares(workspaceState.siteKeyShares);
+  workspaceState.keyRequestState = "";
+  if (workspaceState.publicState?.siteInfo) {
+    workspaceState.publicState.siteInfo = {
+      ...workspaceState.publicState.siteInfo,
+      activePubkey: currentShare.sitePubkey
+    };
   }
 }
 
@@ -2011,6 +2027,75 @@ async function loadStaticSlugs() {
 
 function dedupe(values) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function siteKeyShareCacheKey(pubkey = workspaceState.viewer?.pubkey || "") {
+  return `${SITE.nostr.storageNamespace}.admin-site-shares.${pubkey}`;
+}
+
+function loadCachedSiteKeyShares() {
+  if (!workspaceState.viewer?.pubkey) return [];
+  try {
+    const raw = window.localStorage.getItem(siteKeyShareCacheKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => buildCachedSiteKeyShare(entry?.siteSecretKeyHex || entry?.site_secret_key_hex || "", entry || {}))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function persistCachedSiteKeyShares(shares) {
+  if (!workspaceState.viewer?.pubkey) return;
+  const serialized = mergeSiteKeyShares(shares, []).map((share) => ({
+    siteSecretKeyHex: share.siteSecretKeyHex,
+    sitePubkey: share.sitePubkey,
+    senderPubkey: share.senderPubkey || "",
+    sharedAt: share.sharedAt || ""
+  }));
+  window.localStorage.setItem(siteKeyShareCacheKey(), JSON.stringify(serialized));
+}
+
+function mergeSiteKeyShares(primary, secondary) {
+  const merged = new Map();
+  for (const share of [...(Array.isArray(primary) ? primary : []), ...(Array.isArray(secondary) ? secondary : [])]) {
+    const normalized = normalizeCachedSiteKeyShare(share);
+    if (!normalized || merged.has(normalized.sitePubkey)) continue;
+    merged.set(normalized.sitePubkey, normalized);
+  }
+  return [...merged.values()];
+}
+
+function normalizeCachedSiteKeyShare(share) {
+  if (!share) return null;
+  if (typeof share === "string") return buildCachedSiteKeyShare(share);
+  return buildCachedSiteKeyShare(share.siteSecretKeyHex || share.site_secret_key_hex || "", share);
+}
+
+function buildCachedSiteKeyShare(siteSecretKeyHex, meta = {}) {
+  const clean = String(siteSecretKeyHex || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(clean)) return null;
+  let identity;
+  try {
+    identity = deriveIdentity(clean);
+  } catch {
+    return null;
+  }
+  return {
+    siteSecretKeyHex: clean,
+    sitePubkey: identity.pubkey,
+    senderPubkey: String(meta.senderPubkey || meta.sender_pubkey || meta.shared_by || "").trim().toLowerCase(),
+    sharedAt: String(meta.sharedAt || meta.shared_at || "").trim(),
+    event: meta.event || null
+  };
+}
+
+function findSiteKeyShareInList(shares, sitePubkey = "") {
+  const targetSitePubkey = String(sitePubkey || "").trim().toLowerCase();
+  if (!targetSitePubkey) return (Array.isArray(shares) ? shares : [])[0] || null;
+  return (Array.isArray(shares) ? shares : []).find((share) => share.sitePubkey === targetSitePubkey) || null;
 }
 
 function resolveDirectUserPubkey() {
