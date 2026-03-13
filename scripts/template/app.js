@@ -166,7 +166,21 @@ function renderNavigation() {
 
   nav.innerHTML = `
     <a class="${navLinkClass(page, "home")}" href="./index.html">Home</a>
-    <a class="${navLinkClass(page, "blog")}" href="./blog.html">Blog</a>
+    ${
+      isAdmin
+        ? `
+          <div class="nav-group ${NAV_KEYS.blog.includes(page) ? "is-current" : ""}" data-nav-group>
+            <button class="nav-group__toggle" type="button" data-submenu-toggle>
+              Blog
+            </button>
+            <div class="nav-group__panel">
+              <a class="${navLinkClass(page, "blog")}" href="./blog.html">View Blog</a>
+              <a href="./editor.html">Create Post</a>
+            </div>
+          </div>
+        `
+        : `<a class="${navLinkClass(page, "blog")}" href="./blog.html">Blog</a>`
+    }
     <a class="${navLinkClass(page, "map", !mapEnabled && !mapCurrent)}" href="./map.html" ${!mapEnabled && !mapCurrent ? 'aria-disabled="true"' : ""}>Map</a>
     <div class="nav-group ${NAV_KEYS["get-involved"].includes(page) ? "is-current" : ""}" data-nav-group>
       <button class="nav-group__toggle" type="button" data-submenu-toggle>
@@ -243,10 +257,13 @@ function initExternalLinks() {
 async function initBlogCards() {
   const homeGrid = document.querySelector("[data-home-posts]");
   const listGrid = document.querySelector("[data-blog-list]");
-  if (!homeGrid && !listGrid) return;
+  const draftHost = document.querySelector("[data-blog-drafts]");
+  if (!homeGrid && !listGrid && !draftHost) return;
 
   try {
     const posts = await loadPosts();
+    const publicState = await getPublicState();
+    const canEdit = editorEntryAllowed(publicState);
     if (homeGrid) {
       const count = Number(homeGrid.getAttribute("data-count") || "2");
       homeGrid.innerHTML = posts
@@ -258,8 +275,13 @@ async function initBlogCards() {
     if (listGrid) {
       listGrid.innerHTML = posts.map((post) => renderPostCard(post, false)).join("");
     }
+    if (draftHost instanceof HTMLElement) {
+      const drafts = canEdit ? buildDraftArchiveEntries(publicState.drafts || []) : [];
+      draftHost.hidden = !drafts.length;
+      draftHost.innerHTML = drafts.length ? renderDraftArchive(drafts) : "";
+    }
   } catch {
-    renderError(homeGrid || listGrid, "Blog feed unavailable.");
+    renderError(homeGrid || listGrid || draftHost, "Blog feed unavailable.");
   }
 }
 
@@ -615,32 +637,67 @@ function renderAvatarBadge(user, fallbackLabel, className) {
 }
 
 function renderPostCard(post, compact) {
+  const href = post.href || `./post.html?slug=${encodeURIComponent(post.slug)}`;
+  const eyebrow = post.eyebrow || "Blog post";
+  const actionLabel = post.actionLabel || "Open post";
   if (!compact) {
     return `
       <article class="post-card post-card--list">
         <div class="post-card__body">
-          <div class="eyebrow">Blog post</div>
-          <h3><a href="./post.html?slug=${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h3>
+          <div class="eyebrow">${escapeHtml(eyebrow)}</div>
+          <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
           <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
           <p class="card-summary">${escapeHtml(post.summary)}</p>
           <div class="tag-row">${renderTagList((post.tags || []).slice(0, 4))}</div>
         </div>
         <div class="post-card__rail">
-          <a class="text-link" href="./post.html?slug=${encodeURIComponent(post.slug)}">Open post</a>
+          <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
         </div>
       </article>
     `;
   }
   return `
     <article class="post-card ${compact ? "post-card--compact" : ""}">
-      <div class="eyebrow">Blog post</div>
-      <h3><a href="./post.html?slug=${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h3>
+      <div class="eyebrow">${escapeHtml(eyebrow)}</div>
+      <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
       <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
       <p>${escapeHtml(post.summary)}</p>
       <div class="tag-row">${renderTagList((post.tags || []).slice(0, compact ? 2 : 4))}</div>
-      <a class="text-link" href="./post.html?slug=${encodeURIComponent(post.slug)}">Open post</a>
+      <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
     </article>
   `;
+}
+
+function buildDraftArchiveEntries(drafts) {
+  return (Array.isArray(drafts) ? drafts : [])
+    .map((draft) => ({
+      ...draft,
+      eyebrow: draftStatusLabel(draft.status),
+      actionLabel: "Open draft",
+      href: `./editor.html?slug=${encodeURIComponent(draft.slug)}`,
+      location: draft.location || "Draft location pending",
+      summary: draft.summary || "This draft does not have a summary yet."
+    }))
+    .sort((left, right) => String(right.date || "").localeCompare(String(left.date || "")));
+}
+
+function renderDraftArchive(drafts) {
+  return `
+    <div class="eyebrow">Drafts</div>
+    <h3>Working drafts and review queue</h3>
+    <p class="muted-text">Only admins can see this section. Open any draft to keep writing or send it forward.</p>
+    <div class="story-list story-list--drafts">
+      ${drafts.map((draft) => renderPostCard(draft, false)).join("")}
+    </div>
+  `;
+}
+
+function draftStatusLabel(status) {
+  const clean = String(status || "").trim().toLowerCase();
+  if (["candidate", "review", "submitted"].includes(clean)) return "In review";
+  if (clean === "approved") return "Approved for snapshot";
+  if (clean === "rejected") return "Sent back";
+  return "Working draft";
 }
 
 function renderRecordList(records) {
