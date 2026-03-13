@@ -6,6 +6,7 @@ import {
   deriveIdentity,
   ensureEventToolsLoaded,
   generateSecretKeyHex,
+  loadAdminKeyShare,
   loadAdminKeyShares,
   loadInboxSubmissions,
   loadPublicState,
@@ -43,6 +44,7 @@ const workspaceState = {
   keyRequestTimer: 0,
   backgroundSyncTimer: 0,
   backgroundSyncInFlight: false,
+  inboxLoading: false,
   respondedKeyRequests: new Set(),
   keyRequestCache: null
 };
@@ -203,22 +205,35 @@ async function refreshWorkspace(force = false) {
     window.clearTimeout(workspaceState.backgroundSyncTimer);
     workspaceState.backgroundSyncTimer = 0;
   }
-  renderWorkspaceLoading(workspaceState.session ? "Looking up workspace..." : "Looking up account...");
+  workspaceState.session = getStoredSession();
+  workspaceState.viewer = null;
+  if (!workspaceState.session) {
+    workspaceState.publicState = workspaceState.publicState || null;
+    workspaceState.siteKeyShares = [];
+    workspaceState.siteKeyShare = null;
+    workspaceState.inboxSubmissions = [];
+    workspaceState.activeTab = "login";
+    renderWorkspace();
+    return;
+  }
+
+  renderWorkspaceLoading("Looking up workspace...");
   await ensureEventToolsLoaded();
   await hydrateWorkspaceState(force);
+  workspaceState.staticSlugs = await loadStaticSlugs().catch(() => []);
+  workspaceState.activeTab = chooseInitialTab(workspaceState.activeTab);
+  renderWorkspace();
   workspaceState.keyRequestState = "";
   await maybeAutoRespondToKeyRequests().catch(() => {});
   await maybeEnsureCurrentKeyRequest().catch(() => {
     workspaceState.keyRequestState = "error";
   });
   if (currentUserHasInboxAccess()) {
-    workspaceState.inboxSubmissions = await loadInboxSubmissions(workspaceState.siteKeyShares).catch(() => []);
+    void hydrateInboxSubmissions();
   } else {
+    workspaceState.inboxLoading = false;
     workspaceState.inboxSubmissions = [];
   }
-  workspaceState.staticSlugs = await loadStaticSlugs().catch(() => []);
-  workspaceState.activeTab = chooseInitialTab(workspaceState.activeTab);
-  renderWorkspace();
   scheduleWorkspaceSync();
 }
 
@@ -244,15 +259,25 @@ async function hydrateWorkspaceState(force = false) {
   workspaceState.viewer = workspaceState.session
     ? deriveIdentity(workspaceState.session.secretKeyHex)
     : null;
-  workspaceState.publicState = await loadPublicState(force);
-  const remoteShares = workspaceState.session
-    ? await loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
-    : [];
-  workspaceState.siteKeyShares = mergeSiteKeyShares(remoteShares, loadCachedSiteKeyShares());
+  const cachedShares = loadCachedSiteKeyShares();
+  const [publicState, remoteShares] = await Promise.all([
+    loadPublicState(force),
+    workspaceState.session
+      ? loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
+      : Promise.resolve([])
+  ]);
+  workspaceState.publicState = publicState;
+  const activeSitePubkey = resolveSitePubkey(workspaceState.publicState);
+  let mergedShares = mergeSiteKeyShares(remoteShares, cachedShares);
+  if (workspaceState.session && activeSitePubkey && !findSiteKeyShareInList(mergedShares, activeSitePubkey)) {
+    const currentShare = await loadAdminKeyShare(workspaceState.session.secretKeyHex, activeSitePubkey).catch(() => null);
+    mergedShares = mergeSiteKeyShares(currentShare ? [currentShare, ...mergedShares] : mergedShares, []);
+  }
+  workspaceState.siteKeyShares = mergedShares;
   persistCachedSiteKeyShares(workspaceState.siteKeyShares);
   workspaceState.siteKeyShare = findSiteKeyShareInList(
     workspaceState.siteKeyShares,
-    resolveSitePubkey(workspaceState.publicState)
+    activeSitePubkey
   );
 }
 
@@ -321,8 +346,9 @@ async function syncWorkspaceState(force = true) {
       workspaceState.keyRequestState = "error";
     });
     if (currentUserHasInboxAccess()) {
-      workspaceState.inboxSubmissions = await loadInboxSubmissions(workspaceState.siteKeyShares).catch(() => []);
+      void hydrateInboxSubmissions();
     } else {
+      workspaceState.inboxLoading = false;
       workspaceState.inboxSubmissions = [];
     }
     workspaceState.staticSlugs = await loadStaticSlugs().catch(() => []);
@@ -340,6 +366,15 @@ async function syncWorkspaceState(force = true) {
     workspaceState.backgroundSyncInFlight = false;
     if (!didRefresh) scheduleWorkspaceSync();
   }
+}
+
+async function hydrateInboxSubmissions() {
+  if (!currentUserHasInboxAccess()) return;
+  workspaceState.inboxLoading = true;
+  renderWorkspace({ soft: true });
+  workspaceState.inboxSubmissions = await loadInboxSubmissions(workspaceState.siteKeyShares).catch(() => []);
+  workspaceState.inboxLoading = false;
+  renderWorkspace({ soft: true });
 }
 
 function renderWorkspace(options = {}) {

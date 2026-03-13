@@ -351,9 +351,46 @@ async function loadAdminKeyShares(secretKeyHex) {
 }
 
 async function loadAdminKeyShare(secretKeyHex, sitePubkey = "") {
-  const shares = await loadAdminKeyShares(secretKeyHex);
   const targetSitePubkey = normalizePubkey(sitePubkey || "");
-  if (!targetSitePubkey) return shares[0] || null;
+  if (!targetSitePubkey) {
+    const shares = await loadAdminKeyShares(secretKeyHex);
+    return shares[0] || null;
+  }
+  const tools = getEventTools();
+  if (!tools) throw new Error("Nostr tools unavailable.");
+  const { nip04 } = tools;
+  const identity = deriveIdentity(secretKeyHex);
+  const targetedEvents = await queryEvents([
+    {
+      kinds: [config.nostr.kinds.adminKeyShare],
+      "#p": [identity.pubkey],
+      "#d": [`site-key:${targetSitePubkey}`],
+      "#t": [config.nostr.appTag],
+      limit: 24
+    }
+  ], {
+    relays: combinedAuthorityRelayList(),
+    timeoutMs: Math.max(authorityConnectTimeoutMs(), 9000)
+  });
+  for (const event of targetedEvents.sort(compareEventDesc)) {
+    try {
+      const payload = parseObject(await nip04.decrypt(identity.secretKey, event.pubkey, event.content));
+      if (!payload || payload.protocol !== protocolName("admin-key-share")) continue;
+      const siteSecretKeyHex = String(payload.site_secret_key_hex || "").trim().toLowerCase();
+      const siteIdentity = deriveIdentity(siteSecretKeyHex);
+      if (siteIdentity.pubkey !== targetSitePubkey) continue;
+      return {
+        siteSecretKeyHex,
+        sitePubkey: siteIdentity.pubkey,
+        senderPubkey: event.pubkey,
+        sharedAt: String(payload.shared_at || ""),
+        event
+      };
+    } catch {
+      continue;
+    }
+  }
+  const shares = await loadAdminKeyShares(secretKeyHex);
   return shares.find((share) => share.sitePubkey === targetSitePubkey) || null;
 }
 
