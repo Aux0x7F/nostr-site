@@ -1156,24 +1156,21 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.55rem;
+  gap: 1rem;
+  min-height: 3.35rem;
   border-bottom: 1px solid rgba(18, 18, 18, 0.08);
   background: #fff;
-  padding: 0.95rem 1rem;
+  padding: 0 1.1rem;
 }
 
 .editor-markdown-field .toastui-editor-toolbar-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 1rem;
   margin: 0;
-  padding-right: 0.75rem;
-  border-right: 1px solid rgba(18, 18, 18, 0.08);
-}
-
-.editor-markdown-field .toastui-editor-toolbar-group:last-child {
-  border-right: 0;
   padding-right: 0;
+  border-right: 0;
 }
 
 .editor-markdown-field .toastui-editor-defaultUI-toolbar button {
@@ -1192,9 +1189,9 @@ h3 {
 
 .editor-markdown-field .toastui-editor-toolbar-icons,
 .editor-markdown-field .toastui-editor-toolbar-icons.last {
-  border-radius: 999px;
-  border: 1px solid rgba(18, 18, 18, 0.08);
-  background-color: rgba(255, 255, 255, 0.98);
+  border-radius: 0;
+  border: 0;
+  background-color: transparent;
   background-image: none !important;
   color: var(--ink);
   display: inline-flex;
@@ -1202,14 +1199,14 @@ h3 {
   justify-content: center;
   width: auto !important;
   min-width: 0;
-  height: 2.6rem !important;
-  padding: 0 1rem;
+  height: auto !important;
+  padding: 0.95rem 0;
   text-indent: 0 !important;
   white-space: nowrap;
   overflow: visible;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  box-shadow: none;
   font-family: "IBM Plex Sans", sans-serif;
-  font-size: 0.82rem !important;
+  font-size: 0.98rem !important;
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1;
@@ -1227,8 +1224,11 @@ h3 {
 .editor-markdown-field .toastui-editor-toolbar-icons.active,
 .editor-markdown-field .toastui-editor-toolbar-icons.last:hover,
 .editor-markdown-field .toastui-editor-toolbar-icons.last.active {
-  background-color: rgba(156, 29, 24, 0.1);
-  border-color: rgba(156, 29, 24, 0.22);
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--accent-deep);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
 }
 
 .editor-markdown-field .toastui-editor-toolbar-divider {
