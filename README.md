@@ -159,7 +159,10 @@ When you want another site to consume the generic layer, the current plan is:
 2. publish or vendor the resulting `support-lib/dist/*`
 3. wrap site-specific config and UI around that package
 
-The support library now also exports `createNostrCrdtBridge(config)` as the framework-side seam for integrating `nostr-crdt`.
+The support library now also exports:
+
+- `createNostrCrdtBridge(config)` for low-level room, signer, and transport wiring
+- `createStaticPageOverlayApi(config)` for the first page-unit live overlay slice
 
 That is the path `truecost` should move onto once `nostr-site` is pushed and the generic bundle location is settled.
 
