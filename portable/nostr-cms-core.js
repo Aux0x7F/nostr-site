@@ -898,6 +898,7 @@ function buildPublicState(events, seedEntities = []) {
       const payload = parseObject(event.content);
       const slug = cleanSlug(payload?.slug || firstTag(event, "d"));
       if (!slug) continue;
+      const contentType = String(payload?.content_type || payload?.contentType || "post").trim().toLowerCase() || "post";
       const next = {
         slug,
         author: normalizePubkey(event.pubkey),
@@ -910,6 +911,14 @@ function buildPublicState(events, seedEntities = []) {
         featured: Boolean(payload?.featured),
         date: String(payload?.date || new Date(toUnix(event.created_at) * 1000).toISOString().slice(0, 10)),
         entity_refs: Array.isArray(payload?.entity_refs) ? payload.entity_refs : [],
+        content_type: contentType,
+        page_id: cleanSlug(payload?.page_id || payload?.pageId || ""),
+        page_path: String(payload?.page_path || payload?.pagePath || "").trim(),
+        page_content: payload?.page_content && typeof payload.page_content === "object"
+          ? payload.page_content
+          : payload?.pageContent && typeof payload.pageContent === "object"
+            ? payload.pageContent
+            : null,
         created_at: toUnix(event.created_at),
         id: event.id,
         _event: event
