@@ -226,11 +226,13 @@ The access rule is:
 
 - an admin publishes a signed `snapshotRequest` event with `op=bake`
 - peer pinner verifies the signer is still an admin
-- peer pinner rebuilds approved entities and bakeable posts from mirrored relay state
+- peer pinner rebuilds approved entities, bakeable posts, and approved static-page updates from mirrored relay state
 - files are materialized into a local snapshot tree
-- if `SNAPSHOT_REPO_DIR` is configured, the same managed files are synced into that repo
+- if `SNAPSHOT_REPO_DIR` is configured, generated content plus approved page patches are synced into that repo
 - if GitHub env is configured too, peer pinner updates a dedicated bakedown branch and opens or reuses a PR
 - peer pinner publishes a signed `snapshot` event with counts, file entries, and optional PR metadata
+
+Approved page updates are merged one page at a time by slug, so the latest approved draft for a given page wins, while different approved pages bake together in the same snapshot request.
 
 The intended flow is:
 
