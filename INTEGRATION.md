@@ -67,3 +67,18 @@ The migration path should be:
 1. keep current static-first rendering
 2. add live collaborative units one unit type at a time
 3. preserve bakedown and PR workflow as the static publication layer
+
+## Current integration surface
+
+The framework now exposes a generic CRDT bridge for host code:
+
+- `createNostrCrdtBridge(config)`
+
+That bridge is responsible for:
+
+- deriving room ids from the site namespace
+- creating a transport adapter on top of the existing relay toolchain
+- creating signers from the existing deterministic key model
+- creating Yjs sync instances without embedding application-specific trust rules
+
+The first intended consumer is static page units.
