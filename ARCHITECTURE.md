@@ -29,11 +29,13 @@ Today, `nostr-site` already provides:
 - encrypted submission intake
 - peer-pinner-driven bakedown and PR support
 - static-first rendering with relay-backed enrichment
+- generic CRDT transport bridge to `nostr-crdt`
+- generic static-page live overlay helper with host-provided trust rules
 
 Today, `nostr-site` does not yet provide:
 
-- generic CRDT-backed collaborative document sync
-- live overlay application from CRDT document state
+- generic post and entity collaborative unit helpers
+- a full template-level consumer for every collaborative unit type
 
 ## Target model
 

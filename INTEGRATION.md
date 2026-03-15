@@ -73,6 +73,7 @@ The migration path should be:
 The framework now exposes a generic CRDT bridge for host code:
 
 - `createNostrCrdtBridge(config)`
+- `createStaticPageOverlayApi(config)`
 
 That bridge is responsible for:
 
@@ -82,3 +83,10 @@ That bridge is responsible for:
 - creating Yjs sync instances without embedding application-specific trust rules
 
 The first intended consumer is static page units.
+
+`createStaticPageOverlayApi(config)` is the higher-level helper for that first slice. It provides:
+
+- one live unit per page id
+- trusted signer filtering via host-provided admin lookup
+- read-only live overlay for visitors
+- explicit publish hooks for admin-authored page changes
