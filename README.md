@@ -35,6 +35,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - placeholder public pages
 - generic placeholder content
 - reusable Nostr/CMS helpers in `portable/`
+- reusable CRDT bridge for `nostr-crdt` in `portable/`
 - reusable blob upload + cache refresh helpers in `portable/`
 - pending entity publishing from non-admin submit flows
 - reusable minified browser library in `support-lib/`
@@ -157,6 +158,8 @@ When you want another site to consume the generic layer, the current plan is:
 1. build `support-lib`
 2. publish or vendor the resulting `support-lib/dist/*`
 3. wrap site-specific config and UI around that package
+
+The support library now also exports `createNostrCrdtBridge(config)` as the framework-side seam for integrating `nostr-crdt`.
 
 That is the path `truecost` should move onto once `nostr-site` is pushed and the generic bundle location is settled.
 
