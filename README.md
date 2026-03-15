@@ -22,6 +22,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - `blog.html` and `post.html`: generic blog index and detail pages
 - `content/blog/`: committed blog markdown and index manifest
 - `content/data/entities.json`: committed baked entity seed data
+- `ARCHITECTURE.md`: generic host-app contract and live-overlay model
+- `INTEGRATION.md`: how the framework should consume a generic CRDT transport
 - `scripts/`: browser entrypoints and template implementation
 - `scripts/core/`: site config, session, content, and Nostr helpers
 - `portable/`: source-of-truth reusable Nostr/CMS logic
@@ -41,6 +43,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - GitHub Pages workflow in `.github/workflows/deploy.yml`
 
 ## Operating model
+
+See `ARCHITECTURE.md` for the intended long-term split between generic transport, host-app trust policy, and site-specific implementation.
 
 The intended workflow is:
 
