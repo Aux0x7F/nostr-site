@@ -1190,9 +1190,9 @@ async function generateSnapshot(requestEvent, payload = {}) {
   const versionTs = Math.floor(Date.now() / 1000);
   const generatedAt = new Date(versionTs * 1000).toISOString();
   const snapshotState = collectApprovedSnapshotState();
-  const rendered = renderSnapshotFiles(snapshotState);
+  const rendered = renderSnapshotFiles(snapshotState, { pageSourceRoot: SNAPSHOT_REPO_DIR });
   const localRoot = path.join(SNAPSHOT_DIR, "current");
-  writeSnapshotTree(localRoot, rendered);
+  writeSnapshotTree(localRoot, rendered, { managePatchedFiles: true });
   const git = SNAPSHOT_REPO_DIR
     ? await syncSnapshotRepo(SNAPSHOT_REPO_DIR, rendered, requestId, snapshotState).catch(() => null)
     : null;
@@ -1215,7 +1215,8 @@ async function generateSnapshot(requestEvent, payload = {}) {
       version_ts: versionTs,
       counts: {
         entities: snapshotState.entities.length,
-        posts: snapshotState.posts.length
+        posts: snapshotState.posts.length,
+        pages: snapshotState.pages.length
       },
       entries,
       git
@@ -1250,15 +1251,21 @@ function collectApprovedSnapshotState() {
     }))
     .filter((entity) => entity.status === "approved")
     .sort((left, right) => left.name.localeCompare(right.name));
-  const approvedPosts = [...drafts.values()]
-    .filter((draft) => isBakeableDraftStatus(draft.status))
+  const approvedDrafts = [...drafts.values()]
+    .filter((draft) => isBakeableDraftStatus(draft.status));
+  const approvedPosts = approvedDrafts
+    .filter((draft) => !isBakeablePageDraft(draft))
     .sort((left, right) => {
       if (left.date !== right.date) return String(right.date).localeCompare(String(left.date));
       return compareEventAsc(left._event, right._event) * -1;
     });
+  const approvedPages = approvedDrafts
+    .filter((draft) => isBakeablePageDraft(draft))
+    .sort((left, right) => String(left.page_path || "").localeCompare(String(right.page_path || "")));
   return {
     entities: approvedEntities,
-    posts: approvedPosts
+    posts: approvedPosts,
+    pages: approvedPages
   };
 }
 
@@ -1291,6 +1298,7 @@ function parseSnapshotDraftEvent(ev) {
   if (!payload) return null;
   const slug = slugifyValue(payload.slug || firstTag(ev, "d") || payload.title || "");
   if (!slug) return null;
+  const contentType = String(payload.content_type || payload.contentType || "post").trim().toLowerCase() || "post";
   return {
     slug,
     author: normPk(ev.pubkey),
@@ -1306,6 +1314,14 @@ function parseSnapshotDraftEvent(ev) {
     entity_refs: Array.isArray(payload.entity_refs)
       ? payload.entity_refs.map((item) => slugifyValue(item)).filter(Boolean)
       : [],
+    content_type: contentType,
+    page_id: slugifyValue(payload.page_id || payload.pageId || ""),
+    page_path: normalizeRelativePath(String(payload.page_path || payload.pagePath || "").trim()),
+    page_content: payload.page_content && typeof payload.page_content === "object"
+      ? payload.page_content
+      : payload.pageContent && typeof payload.pageContent === "object"
+        ? payload.pageContent
+        : null,
     created_at: unixOr(ev.created_at, 0),
     id: ev.id,
     _event: ev
@@ -1317,9 +1333,17 @@ function isBakeableDraftStatus(statusValue) {
   return ["approved", "published", "public", "live", "placeholder"].includes(status);
 }
 
-function renderSnapshotFiles(snapshotState) {
+function isBakeablePageDraft(draft) {
+  return String(draft?.content_type || "").trim().toLowerCase() === "page"
+    && normalizeRelativePath(draft?.page_path || "")
+    && draft?.page_content
+    && typeof draft.page_content === "object";
+}
+
+function renderSnapshotFiles(snapshotState, options = {}) {
   const fileEntries = [];
   const files = new Map();
+  const patchedFiles = new Map();
   const blogFiles = [];
 
   for (const post of snapshotState.posts) {
@@ -1355,7 +1379,25 @@ function renderSnapshotFiles(snapshotState) {
   fileEntries.push({ path: SNAPSHOT_BLOG_INDEX, type: "index" });
   fileEntries.push({ path: SNAPSHOT_ENTITIES_PATH, type: "entities" });
 
-  return { files, fileEntries };
+  const pageSourceRoot = String(options.pageSourceRoot || "").trim();
+  if (pageSourceRoot) {
+    for (const page of snapshotState.pages || []) {
+      const relPath = normalizeRelativePath(page.page_path || "");
+      if (!relPath) continue;
+      const sourcePath = safeJoinRoot(pageSourceRoot, relPath);
+      if (!fs.existsSync(sourcePath)) continue;
+      const originalHtml = fs.readFileSync(sourcePath, "utf8");
+      const nextHtml = applyStaticPageContentToHtml(originalHtml, page.page_content || {});
+      patchedFiles.set(relPath, nextHtml);
+      fileEntries.push({
+        path: relPath,
+        slug: page.slug || page.page_id || "",
+        type: "page"
+      });
+    }
+  }
+
+  return { files, patchedFiles, fileEntries };
 }
 
 function buildSnapshotMarkdown(post) {
@@ -1374,7 +1416,7 @@ function buildSnapshotMarkdown(post) {
   return `<!--${SNAPSHOT_MARKER}\n${JSON.stringify(meta, null, 2)}\n-->\n\n${String(post.markdown || "").trim()}\n`;
 }
 
-function writeSnapshotTree(targetRoot, rendered) {
+function writeSnapshotTree(targetRoot, rendered, options = {}) {
   const root = path.resolve(String(targetRoot || "").trim());
   if (!root) throw new Error("snapshot target root is required");
   fs.mkdirSync(root, { recursive: true });
@@ -1386,6 +1428,13 @@ function writeSnapshotTree(targetRoot, rendered) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(targetPath, String(content), "utf8");
     nextManaged.push(relPath);
+  }
+  const managePatchedFiles = Boolean(options.managePatchedFiles);
+  for (const [relPath, content] of rendered.patchedFiles.entries()) {
+    const targetPath = safeJoinRoot(root, relPath);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, String(content), "utf8");
+    if (managePatchedFiles) nextManaged.push(relPath);
   }
   for (const relPath of currentManifest.paths) {
     if (nextManaged.includes(relPath)) continue;
@@ -1426,9 +1475,10 @@ async function syncSnapshotRepo(repoDir, rendered, requestId, snapshotState) {
   const root = ensureGitRepoRoot(repoDir);
   const branch = buildBakeBranchName();
   resetBakeBranch(root, branch);
-  const write = writeSnapshotTree(root, rendered);
+  const write = writeSnapshotTree(root, rendered, { managePatchedFiles: false });
   const managedPaths = [...write.managedPaths, SNAPSHOT_MANAGED_PATH];
-  runGit(root, ["add", "--", ...managedPaths]);
+  const changedPaths = dedupeStrings([...managedPaths, ...rendered.patchedFiles.keys()]);
+  runGit(root, ["add", "--", ...changedPaths]);
   let commit = runGit(root, ["rev-parse", "HEAD"]).trim();
   let changed = false;
   try {
@@ -1728,9 +1778,30 @@ function buildPullRequestBody(requestId, snapshotState) {
     `- Request: \`${requestId}\``,
     `- Approved posts: ${snapshotState.posts.length}`,
     `- Approved entities: ${snapshotState.entities.length}`,
+    `- Approved pages: ${snapshotState.pages.length}`,
     "",
     "Merge this PR after reviewing the generated seed files."
   ].join("\n");
+}
+
+function applyStaticPageContentToHtml(html, pageContent) {
+  let nextHtml = String(html || "");
+  for (const [key, value] of Object.entries(pageContent || {})) {
+    const cleanKey = String(key || "").trim();
+    if (!cleanKey) continue;
+    const matcher = new RegExp(
+      `(<([a-zA-Z0-9:-]+)\\b[^>]*\\bdata-static-edit=(["'])${escapeRegExp(cleanKey)}\\3[^>]*>)([\\s\\S]*?)(</\\2>)`,
+      "m"
+    );
+    nextHtml = nextHtml.replace(matcher, (full, openTag, tagName, quote, innerContent, closeTag) => (
+      `${openTag}${String(value || "")}${closeTag}`
+    ));
+  }
+  return nextHtml;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function githubJson(url, options = {}) {
