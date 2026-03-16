@@ -74,6 +74,7 @@ The framework now exposes a generic CRDT bridge for host code:
 
 - `createNostrCrdtBridge(config)`
 - `createStaticPageOverlayApi(config)`
+- `createStructuredUnitOverlayApi(config)`
 
 The framework also exposes a public-state repair layer through `createNostrCmsClient(config)`:
 
@@ -109,6 +110,13 @@ The first intended consumer is static page units.
 - trusted signer filtering via host-provided admin lookup
 - read-only live overlay for visitors
 - explicit publish hooks for admin-authored page changes
+
+`createStructuredUnitOverlayApi(config)` is the generic companion for object-like units. It provides:
+
+- one live unit per document id
+- structured object sync over the same verified Yjs/Nostr transport
+- trusted signer filtering via host-provided acceptance checks
+- read-only overlay for visitors and explicit publish hooks for trusted editors
 
 The public-state repair layer is intentionally separate from CRDT unit sync.
 

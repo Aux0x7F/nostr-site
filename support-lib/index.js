@@ -3,6 +3,7 @@ export { createDeterministicSessionApi } from "../portable/deterministic-session
 export { createBlobStoreApi } from "../portable/blob-store.js";
 export { createNostrCrdtBridge } from "../portable/crdt-transport.js";
 export { createStaticPageOverlayApi } from "../portable/static-page-overlay.js";
+export { createStructuredUnitOverlayApi } from "../portable/structured-unit-overlay.js";
 export {
   parseContentDocument,
   enrichEntityReferences,

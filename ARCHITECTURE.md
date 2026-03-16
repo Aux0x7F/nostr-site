@@ -31,13 +31,13 @@ Today, `nostr-site` already provides:
 - static-first rendering with relay-backed enrichment
 - generic CRDT transport bridge to `nostr-crdt`
 - generic static-page live overlay helper with host-provided trust rules
+- generic structured live-unit overlay helper for post-like and record-like documents
 - cached public-event replay and peer-assisted repair requests for partial relay reads, limited to locally verified signed events
 - generic comment vote aggregation in public state
 - reusable trusted HTML sanitization helpers for host renderers
 
 Today, `nostr-site` does not yet provide:
 
-- generic post and entity collaborative unit helpers
 - a full template-level consumer for every collaborative unit type
 
 ## Target model
@@ -110,6 +110,11 @@ When `nostr-site` adopts `nostr-crdt`, the first integration should target:
 - static pages
 - posts
 - entity or wiki records
+
+The reusable helpers are now split accordingly:
+
+- `createStaticPageOverlayApi(config)` for page-field overlays
+- `createStructuredUnitOverlayApi(config)` for object-like collaborative units such as posts and entity records
 
 Submissions, admin logs, moderation events, and other workflow records can stay event-shaped rather than CRDT-shaped unless a real collaboration need appears.
 
