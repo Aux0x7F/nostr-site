@@ -685,16 +685,35 @@ function buildCommentTree(comments) {
   const roots = [];
   for (const node of nodes.values()) {
     const parentId = String(node.parent_id || "").trim();
-    const parent = parentId ? nodes.get(parentId) : null;
-    if (parent && parent.post_slug === node.post_slug) {
+    if (!parentId) {
+      roots.push(node);
+      continue;
+    }
+    const parent = nodes.get(parentId);
+    if (isCommentThreadAnchor(parent, node)) {
       if (!node.root_id) node.root_id = parent.root_id || parent.id;
       parent.replies.push(node);
-    } else {
-      roots.push(node);
+      continue;
+    }
+    const rootId = String(node.root_id || "").trim();
+    const threadRoot = rootId ? nodes.get(rootId) : null;
+    if (isCommentThreadAnchor(threadRoot, node)) {
+      node.root_id = threadRoot.id;
+      threadRoot.replies.push(node);
     }
   }
   sortCommentNodes(roots);
   return roots;
+}
+
+function isCommentThreadAnchor(anchor, node) {
+  return Boolean(
+    anchor &&
+    node &&
+    anchor.id !== node.id &&
+    String(anchor.post_slug || "").trim() &&
+    String(anchor.post_slug || "").trim() === String(node.post_slug || "").trim()
+  );
 }
 
 function sortCommentNodes(nodes) {
