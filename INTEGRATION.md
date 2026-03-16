@@ -82,13 +82,24 @@ The framework also exposes a public-state repair layer through `createNostrCmsCl
 - `requestPublicStateRepair(secretKeyHex, options)`
 - `startPublicStateRepairPeer()`
 
+The support bundle also exposes host-side rendering helpers:
+
+- `sanitizeTrustedHtml(html)`
+- `sanitizeUrl(value, mode)`
+
 That bridge is responsible for:
 
 - deriving room ids from the site namespace
 - creating a transport adapter on top of the existing relay toolchain
 - creating signers from the existing deterministic key model
 - verifying signed CRDT events before replay or live apply
+- verifying signed public events before caching or repair rebroadcast
 - creating Yjs sync instances without embedding application-specific trust rules
+
+The public-state model now also includes comment vote aggregation:
+
+- `commentVotes`
+- `score`, `upvoteCount`, and `downvoteCount` on comment records
 
 The first intended consumer is static page units.
 
