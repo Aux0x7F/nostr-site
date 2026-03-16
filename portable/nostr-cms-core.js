@@ -194,6 +194,19 @@ async function loadPublicState(force = false) {
   return publicStatePromise;
 }
 
+function getCachedPublicState() {
+  const cachedEvents = loadCachedPublicEvents();
+  if (!cachedEvents.length) return null;
+  const publicState = buildPublicState(cachedEvents, []);
+  return withPublicStateSyncInfo(publicState, {
+    connected: false,
+    error: "Showing cached public state.",
+    remoteEventCount: 0,
+    cachedEventCount: cachedEvents.length,
+    mergedEventCount: cachedEvents.length
+  });
+}
+
 function publicStateNeedsRepair(publicState) {
   if (!publicState || typeof publicState !== "object") return true;
   const syncInfo = publicState.syncInfo && typeof publicState.syncInfo === "object"
@@ -2125,6 +2138,7 @@ function hexToBytes(hex) {
     deriveIdentity,
     generateSecretKeyHex,
     resolveSitePubkey,
+    getCachedPublicState,
     loadPublicState,
     publicStateNeedsRepair,
     requestPublicStateRepair,

@@ -152,13 +152,11 @@ export function createBlobStoreApi(config, deps) {
 
     const response = await fetch(uploadUrl, {
       method: "PUT",
-      headers: {
-        Authorization: authToken,
-        "Content-Type": uploadType,
-        "X-Blob-Name": encodeURIComponent(fileName),
-        "X-Blob-Purpose": cleanHeader(options.purpose || ""),
-        "X-Blob-Visibility": cleanHeader(options.visibility || "public")
-      },
+      headers: buildUploadHeaders(uploadUrl, authToken, uploadType, {
+        fileName,
+        purpose: options.purpose || "",
+        visibility: options.visibility || "public"
+      }),
       body: bodyBytes
     });
 
@@ -290,6 +288,27 @@ function cleanFileName(value) {
 
 function cleanHeader(value) {
   return String(value || "").replace(/[\r\n]+/g, " ").trim().slice(0, 120);
+}
+
+function buildUploadHeaders(uploadUrl, authToken, uploadType, metadata = {}) {
+  const headers = {
+    Authorization: authToken,
+    "Content-Type": uploadType
+  };
+  if (!shouldSendBlobMetadataHeaders(uploadUrl)) return headers;
+  headers["X-Blob-Name"] = encodeURIComponent(metadata.fileName || "upload.bin");
+  headers["X-Blob-Purpose"] = cleanHeader(metadata.purpose || "");
+  headers["X-Blob-Visibility"] = cleanHeader(metadata.visibility || "public");
+  return headers;
+}
+
+function shouldSendBlobMetadataHeaders(uploadUrl) {
+  if (typeof window === "undefined" || !window.location?.origin) return false;
+  try {
+    return new URL(String(uploadUrl || ""), window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
 }
 
 function shouldRequestRefresh(status) {
