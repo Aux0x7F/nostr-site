@@ -15,7 +15,7 @@ export function parseContentDocument(raw, fallback = {}, options = {}) {
 
   return {
     meta: {
-      slug: fallback.slug || "",
+      slug: meta.slug || fallback.slug || "",
       file: fallback.file || "",
       title: meta.title || fallback.title || "Untitled placeholder",
       date: meta.date || fallback.date || "",

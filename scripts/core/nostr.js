@@ -1,10 +1,12 @@
 import SITE from "./site-config.js";
 import { createNostrCmsClient } from "../../portable/nostr-cms-core.js";
 import { createBlobStoreApi } from "../../portable/blob-store.js";
+import { createStructuredUnitOverlayApi } from "../../portable/structured-unit-overlay.js";
 export { sanitizeTrustedHtml, sanitizeUrl } from "../../portable/html-safety.js";
 
 const client = createNostrCmsClient(SITE);
 const blobs = createBlobStoreApi(SITE, client);
+const structuredUnits = createStructuredUnitOverlayApi(SITE);
 
 export const {
   getEventTools,
@@ -45,7 +47,14 @@ export const {
   waitForBlobFulfillment
 } = blobs;
 
+export const {
+  connectUnit: connectStructuredUnitOverlay,
+  createRoomId: createStructuredUnitRoomId,
+  ensureEventToolsLoaded: ensureStructuredUnitToolsLoaded,
+} = structuredUnits;
+
 export default {
   ...client,
-  ...blobs
+  ...blobs,
+  ...structuredUnits
 };
