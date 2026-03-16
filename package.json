@@ -13,7 +13,7 @@
     "release:check": "npm run build:all && npm run audit:security"
   },
   "dependencies": {
-    "nostr-crdt": "github:Aux0x7F/nostr-crdt#947b60f"
+    "nostr-crdt": "github:Aux0x7F/nostr-crdt#1d8069d"
   },
   "devDependencies": {
     "esbuild": "^0.25.1",
