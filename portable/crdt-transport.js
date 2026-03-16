@@ -107,13 +107,15 @@ export function createNostrCrdtBridge(config) {
       async subscribe(filters, onEvent) {
         const eventTools = await ensureTools();
         const pool = new eventTools.SimplePool();
-        const subscription = pool.subscribeMany(urls, normalizeFilters(filters), {
-          onevent: (event) => onEvent(event),
-          maxWait: waitMs,
-        });
+        const subscriptions = normalizeFilters(filters).map((filter) =>
+          pool.subscribe(urls, filter, {
+            onevent: (event) => onEvent(event),
+            maxWait: waitMs,
+          })
+        );
 
         return async () => {
-          await subscription.close("closed");
+          await Promise.all(subscriptions.map((subscription) => subscription.close("closed")));
           pool.close(urls);
         };
       },
@@ -175,7 +177,18 @@ function getEventTools() {
 }
 
 function normalizeFilters(filters) {
-  return Array.isArray(filters) ? filters.filter(Boolean) : [filters].filter(Boolean);
+  return (Array.isArray(filters) ? filters : [filters])
+    .filter((filter) => filter && typeof filter === "object")
+    .map((filter) => normalizeTransportFilter(filter));
+}
+
+function normalizeTransportFilter(filter) {
+  const next = { ...filter };
+  if (next["#d"]) {
+    delete next["#n"];
+    delete next["#t"];
+  }
+  return next;
 }
 
 function dedupe(values) {
