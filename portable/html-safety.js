@@ -20,6 +20,8 @@ const ALLOWED_TAGS = new Set([
   "code",
   "del",
   "em",
+  "figcaption",
+  "figure",
   "h1",
   "h2",
   "h3",
@@ -47,6 +49,7 @@ const ALLOWED_TAGS = new Set([
 
 const ATTRIBUTE_ALLOWLIST = Object.freeze({
   a: new Set(["href", "title"]),
+  figure: new Set(["class"]),
   img: new Set(["src", "alt", "title", "loading"]),
   code: new Set(["class"]),
   pre: new Set(["class"]),
@@ -55,6 +58,7 @@ const ATTRIBUTE_ALLOWLIST = Object.freeze({
 });
 
 const CLASS_ALLOWLIST = Object.freeze({
+  figure: /^(?:article-image(?:--(?:left|right|full))?|article-image)$/i,
   code: /^language-[a-z0-9_-]+$/i,
   pre: /^language-[a-z0-9_-]+$/i
 });

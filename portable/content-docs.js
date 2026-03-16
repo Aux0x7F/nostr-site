@@ -43,7 +43,7 @@ export function enrichEntityReferences(scope, entities = []) {
       if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
       const parent = node.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
-      if (parent.closest("a, button, code, pre, script, style, textarea, input")) {
+      if (parent.closest("a, button, code, pre, script, style, textarea, input, h1, h2, h3, h4, h5, h6")) {
         return NodeFilter.FILTER_REJECT;
       }
       return NodeFilter.FILTER_ACCEPT;
