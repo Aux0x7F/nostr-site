@@ -34,6 +34,8 @@ export const SITE = Object.freeze({
     maxAttachmentBytes: 90000,
     connectTimeoutMs: 3200,
     authorityConnectTimeoutMs: 9000,
+    publicEventCacheLimit: 800,
+    publicRepairRepublishLimit: 180,
     privateLoadLimit: 200,
     publicLoadLimit: 400,
     filterChunkSize: 12,
@@ -61,7 +63,8 @@ export const SITE = Object.freeze({
       visitPulse: 34141,
       siteKey: 34142,
       adminKeyRequest: 34143,
-      collabDocument: 34144
+      collabDocument: 34144,
+      publicStateRequest: 34145
     }
   }
 });

@@ -15,7 +15,10 @@ import {
   loadPublicState,
   loadSubmissionThread,
   loadUserSubmissions,
-  publishTaggedJson
+  publicStateNeedsRepair,
+  publishTaggedJson,
+  requestPublicStateRepair,
+  startPublicStateRepairPeer
 } from "../core/nostr.js";
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 
@@ -42,6 +45,9 @@ const state = {
   guestSession: getStoredGuestSession(),
   viewer: null,
   publicState: null,
+  publicStateRepairPeerStarted: false,
+  publicStateRepairInFlight: false,
+  publicStateRepairRequestedAt: 0,
   postsPromise: null,
   commentReply: null,
   notifications: [],
@@ -158,6 +164,7 @@ async function bootstrapRelayState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
+    await ensurePublicStateRepairPeer();
     state.publicState = await loadPublicState();
     if (state.session) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
@@ -166,8 +173,19 @@ async function bootstrapRelayState() {
     state.publicState = null;
   }
   void publishVisitPulse();
+  void maybeRequestPublicStateRepair(state.publicState, "bootstrap");
   void hydrateNotifications();
   renderNavigation();
+}
+
+async function ensurePublicStateRepairPeer() {
+  if (state.publicStateRepairPeerStarted) return;
+  try {
+    await startPublicStateRepairPeer();
+    state.publicStateRepairPeerStarted = true;
+  } catch {
+    return;
+  }
 }
 
 function renderNavigation() {
@@ -1364,10 +1382,12 @@ async function getPublicState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
+    await ensurePublicStateRepairPeer();
     state.publicState = await loadPublicState();
     if (state.session && !state.viewer) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
     }
+    void maybeRequestPublicStateRepair(state.publicState, "get-public-state");
     if (state.session) {
       void hydrateNotifications();
     }
@@ -1381,6 +1401,32 @@ async function getPublicState() {
       admins: []
     };
     return state.publicState;
+  }
+}
+
+async function maybeRequestPublicStateRepair(publicState, reason = "") {
+  if (!publicStateNeedsRepair(publicState) || state.publicStateRepairInFlight) return;
+  const now = Date.now();
+  if (now - state.publicStateRepairRequestedAt < 45000) return;
+  let secretKeyHex = state.session?.secretKeyHex || state.guestSession?.secretKeyHex || "";
+  if (!secretKeyHex) {
+    await ensureEventToolsLoaded();
+    state.guestSession = await getOrCreateGuestSession().catch(() => null);
+    secretKeyHex = state.guestSession?.secretKeyHex || "";
+  }
+  if (!secretKeyHex) return;
+  state.publicStateRepairInFlight = true;
+  state.publicStateRepairRequestedAt = now;
+  try {
+    await requestPublicStateRepair(secretKeyHex, {
+      reason,
+      page: document.body.dataset.page || "site",
+      knownEventCount: Array.isArray(publicState?.rawEvents) ? publicState.rawEvents.length : 0
+    });
+  } catch {
+    return;
+  } finally {
+    state.publicStateRepairInFlight = false;
   }
 }
 

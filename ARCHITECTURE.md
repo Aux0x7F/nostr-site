@@ -31,6 +31,7 @@ Today, `nostr-site` already provides:
 - static-first rendering with relay-backed enrichment
 - generic CRDT transport bridge to `nostr-crdt`
 - generic static-page live overlay helper with host-provided trust rules
+- cached public-event replay and peer-assisted repair requests for partial relay reads
 
 Today, `nostr-site` does not yet provide:
 

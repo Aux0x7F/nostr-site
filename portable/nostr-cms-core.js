@@ -1,6 +1,8 @@
 export function createNostrCmsClient(config) {
 let publicStatePromise = null;
 let toolsPromise = null;
+let publicStateRepairPeer = null;
+const handledPublicStateRepairRequests = new Set();
 const toolScriptPaths = {
   bundle: config?.nostr?.toolScriptPaths?.bundle || "./vendor/event-tools.bundle.js",
   shim: config?.nostr?.toolScriptPaths?.shim || "./vendor/event-tools-shim.js"
@@ -155,8 +157,91 @@ async function generateSecretKeyHex() {
 
 async function loadPublicState(force = false) {
   if (!force && publicStatePromise) return publicStatePromise;
-  publicStatePromise = fetchPublicState();
+  publicStatePromise = fetchPublicState().finally(() => {
+    publicStatePromise = null;
+  });
   return publicStatePromise;
+}
+
+function publicStateNeedsRepair(publicState) {
+  if (!publicState || typeof publicState !== "object") return true;
+  const syncInfo = publicState.syncInfo && typeof publicState.syncInfo === "object"
+    ? publicState.syncInfo
+    : {};
+  const remoteEventCount = Number(syncInfo.remoteEventCount || 0) || 0;
+  const cachedEventCount = Number(syncInfo.cachedEventCount || 0) || 0;
+  const rawEventCount = Array.isArray(publicState.rawEvents) ? publicState.rawEvents.length : 0;
+  if (!rawEventCount) return true;
+  if (!publicState.connected && cachedEventCount > 0) return true;
+  if (cachedEventCount > 0 && remoteEventCount === 0) return true;
+  return cachedEventCount > remoteEventCount * 2 && remoteEventCount < 24;
+}
+
+async function requestPublicStateRepair(secretKeyHex, options = {}) {
+  if (!config?.nostr?.kinds?.publicStateRequest) return null;
+  const requestId = cleanSlug(options.requestId || `repair-${Date.now()}`) || `repair-${Date.now()}`;
+  const reason = String(options.reason || "incomplete-public-state").trim() || "incomplete-public-state";
+  const page = cleanSlug(options.page || "") || "";
+  const knownEventCount = Number(options.knownEventCount || 0) || 0;
+  return publishTaggedJson({
+    kind: config.nostr.kinds.publicStateRequest,
+    secretKeyHex,
+    tags: [
+      ["d", requestId],
+      ["k", "public-state-repair"],
+      ...(page ? [["page", page]] : []),
+      ["op", reason]
+    ],
+    content: {
+      protocol: protocolName("public-state-repair"),
+      request_id: requestId,
+      requested_at: new Date().toISOString(),
+      page,
+      reason,
+      known_event_count: knownEventCount
+    }
+  });
+}
+
+async function startPublicStateRepairPeer(options = {}) {
+  if (publicStateRepairPeer) return publicStateRepairPeer;
+  if (!config?.nostr?.kinds?.publicStateRequest) return null;
+  const tools = getEventTools();
+  if (!tools) throw new Error("Nostr tools unavailable.");
+  const { SimplePool } = tools;
+  const relays = normalizeRelayList(options.relays, publicRelayList());
+  if (!relays.length) return null;
+  const pool = new SimplePool();
+  const since = Math.floor(Date.now() / 1000) - 30;
+  const subscription = pool.subscribe(
+    relays,
+    {
+      kinds: [config.nostr.kinds.publicStateRequest],
+      "#t": [config.nostr.appTag],
+      since
+    },
+    {
+      onevent(event) {
+        void maybeRespondToPublicStateRepairRequest(event, relays, options);
+      }
+    }
+  );
+  publicStateRepairPeer = {
+    relays,
+    stop() {
+      try {
+        subscription?.close?.("closed");
+      } finally {
+        pool.close(relays);
+        publicStateRepairPeer = null;
+      }
+    }
+  };
+  return publicStateRepairPeer;
+}
+
+function stopPublicStateRepairPeer() {
+  publicStateRepairPeer?.stop?.();
 }
 
 async function publishTaggedJson({ kind, secretKeyHex, tags = [], content = {} }) {
@@ -593,6 +678,7 @@ async function fetchPublicState() {
   const seedEntities = await loadSeedEntities();
   const tools = getEventTools();
   if (!tools) return emptyPublicState("Nostr tools unavailable.", seedEntities);
+  const cachedEvents = loadCachedPublicEvents();
 
   try {
     const visitSince = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30;
@@ -663,8 +749,28 @@ async function fetchPublicState() {
         timeoutMs: Number(config.nostr.connectTimeoutMs || 3200)
       })
     ]);
-    return buildPublicState([...authorityEvents, ...contentEvents], seedEntities);
+    const remoteEvents = [...authorityEvents, ...contentEvents];
+    const mergedEvents = mergeCachedEvents(remoteEvents, cachedEvents);
+    persistCachedPublicEvents(mergedEvents);
+    const publicState = buildPublicState(mergedEvents, seedEntities);
+    return withPublicStateSyncInfo(publicState, {
+      connected: remoteEvents.length > 0,
+      error: remoteEvents.length ? "" : cachedEvents.length ? "Live relay data incomplete. Showing cached public state." : "",
+      remoteEventCount: remoteEvents.length,
+      cachedEventCount: cachedEvents.length,
+      mergedEventCount: mergedEvents.length
+    });
   } catch (error) {
+    if (cachedEvents.length) {
+      const publicState = buildPublicState(cachedEvents, seedEntities);
+      return withPublicStateSyncInfo(publicState, {
+        connected: false,
+        error: String(error?.message || error || "Relay timeout."),
+        remoteEventCount: 0,
+        cachedEventCount: cachedEvents.length,
+        mergedEventCount: cachedEvents.length
+      });
+    }
     return emptyPublicState(String(error?.message || error || "Relay timeout."), seedEntities);
   }
 }
@@ -1369,8 +1475,160 @@ function emptyPublicState(error, seedEntities = []) {
       visitorCount7d: 0,
       visitEventCount7d: 0
     },
-    rawEvents: []
+    rawEvents: [],
+    syncInfo: {
+      remoteEventCount: 0,
+      cachedEventCount: 0,
+      mergedEventCount: 0,
+      usedCachedEvents: false
+    }
   };
+}
+
+function withPublicStateSyncInfo(publicState, info = {}) {
+  const remoteEventCount = Number(info.remoteEventCount || 0) || 0;
+  const cachedEventCount = Number(info.cachedEventCount || 0) || 0;
+  const mergedEventCount = Number(info.mergedEventCount || publicState?.rawEvents?.length || 0) || 0;
+  return {
+    ...publicState,
+    connected: Boolean(info.connected),
+    error: String(info.error || publicState?.error || "").trim(),
+    syncInfo: {
+      remoteEventCount,
+      cachedEventCount,
+      mergedEventCount,
+      usedCachedEvents: mergedEventCount > remoteEventCount && cachedEventCount > 0
+    }
+  };
+}
+
+function loadCachedPublicEvents() {
+  try {
+    const raw = window.localStorage.getItem(publicEventCacheKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeCachedPublicEvent).filter(Boolean).sort(compareEventDesc);
+  } catch {
+    return [];
+  }
+}
+
+function persistCachedPublicEvents(events) {
+  try {
+    const normalized = mergeCachedEvents(events, []);
+    window.localStorage.setItem(publicEventCacheKey(), JSON.stringify(normalized.slice(0, publicEventCacheLimit())));
+  } catch {
+    return;
+  }
+}
+
+function mergeCachedEvents(primary, secondary) {
+  const merged = new Map();
+  for (const event of [...(Array.isArray(primary) ? primary : []), ...(Array.isArray(secondary) ? secondary : [])]) {
+    const normalized = normalizeCachedPublicEvent(event);
+    if (!normalized || !normalized.id) continue;
+    if (!merged.has(normalized.id)) merged.set(normalized.id, normalized);
+  }
+  return [...merged.values()].sort(compareEventDesc).slice(0, publicEventCacheLimit());
+}
+
+function normalizeCachedPublicEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  const id = String(event.id || "").trim();
+  const pubkey = normalizePubkey(event.pubkey);
+  const sig = String(event.sig || "").trim();
+  const kind = Number(event.kind);
+  const createdAt = Number(event.created_at || 0);
+  if (!id || !pubkey || !sig || !Number.isFinite(kind) || !Number.isFinite(createdAt)) return null;
+  return {
+    id,
+    pubkey,
+    sig,
+    kind,
+    created_at: Math.floor(createdAt),
+    content: String(event.content || ""),
+    tags: Array.isArray(event.tags)
+      ? event.tags.filter(Array.isArray).map((tag) => tag.map((value) => String(value || "")))
+      : []
+  };
+}
+
+function publicEventCacheKey() {
+  return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-event-cache`;
+}
+
+function publicEventCacheLimit() {
+  const value = Number(config?.nostr?.publicEventCacheLimit || 800);
+  return Number.isFinite(value) && value >= 100 ? Math.floor(value) : 800;
+}
+
+function publicRepairRepublishLimit() {
+  const value = Number(config?.nostr?.publicRepairRepublishLimit || 180);
+  return Number.isFinite(value) && value >= 20 ? Math.floor(value) : 180;
+}
+
+async function maybeRespondToPublicStateRepairRequest(event, relays, options = {}) {
+  const decoded = parseObject(event?.content);
+  const requestId = cleanSlug(decoded?.request_id || firstTag(event, "d"));
+  if (!requestId || handledPublicStateRepairRequests.has(requestId)) return;
+  if (Number(event?.created_at || 0) < Math.floor(Date.now() / 1000) - 120) return;
+  if (!decoded || decoded.protocol !== protocolName("public-state-repair")) return;
+  const cachedEvents = typeof options.getCachedEvents === "function"
+    ? (await Promise.resolve(options.getCachedEvents())).map(normalizeCachedPublicEvent).filter(Boolean)
+    : loadCachedPublicEvents();
+  if (!cachedEvents.length) return;
+  const knownEventCount = Number(decoded?.known_event_count || 0) || 0;
+  if (cachedEvents.length <= knownEventCount) return;
+  handledPublicStateRepairRequests.add(requestId);
+  trimHandledRepairRequestSet();
+  await wait(Math.floor(250 + Math.random() * 900));
+  await rebroadcastCachedPublicEvents(relays, cachedEvents, options);
+}
+
+async function rebroadcastCachedPublicEvents(relays, cachedEvents, options = {}) {
+  const tools = getEventTools();
+  if (!tools) throw new Error("Nostr tools unavailable.");
+  const { SimplePool } = tools;
+  const pool = new SimplePool();
+  const limit = Number(options.limit || publicRepairRepublishLimit());
+  const events = selectRepairEvents(cachedEvents, limit);
+  try {
+    for (const event of events) {
+      await Promise.allSettled(pool.publish(relays, event));
+    }
+  } finally {
+    pool.close(relays);
+  }
+}
+
+function selectRepairEvents(events, limit) {
+  const max = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : publicRepairRepublishLimit();
+  return [...(Array.isArray(events) ? events : [])]
+    .map(normalizeCachedPublicEvent)
+    .filter(Boolean)
+    .sort((left, right) => {
+      const priorityDelta = repairEventPriority(right) - repairEventPriority(left);
+      if (priorityDelta !== 0) return priorityDelta;
+      return compareEventDesc(left, right);
+    })
+    .slice(0, max);
+}
+
+function repairEventPriority(event) {
+  const kind = Number(event?.kind);
+  if (kind === config?.nostr?.kinds?.siteKey) return 6;
+  if (kind === config?.nostr?.kinds?.adminClaim || kind === config?.nostr?.kinds?.adminRole) return 5;
+  if (kind === config?.nostr?.kinds?.nameClaim || kind === config?.nostr?.kinds?.profile) return 4;
+  if (kind === config?.nostr?.kinds?.entity || kind === config?.nostr?.kinds?.draft) return 3;
+  if (kind === config?.nostr?.kinds?.comment || kind === config?.nostr?.kinds?.commentMod) return 2;
+  return 1;
+}
+
+function trimHandledRepairRequestSet() {
+  if (handledPublicStateRepairRequests.size < 256) return;
+  const values = [...handledPublicStateRepairRequests.values()];
+  handledPublicStateRepairRequests.clear();
+  for (const value of values.slice(-128)) handledPublicStateRepairRequests.add(value);
 }
 
 async function loadSeedEntities() {
@@ -1698,6 +1956,12 @@ function withTimeout(promise, timeoutMs) {
   ]);
 }
 
+function wait(timeoutMs) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, Math.max(0, Number(timeoutMs) || 0));
+  });
+}
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`);
@@ -1744,6 +2008,10 @@ function hexToBytes(hex) {
     generateSecretKeyHex,
     resolveSitePubkey,
     loadPublicState,
+    publicStateNeedsRepair,
+    requestPublicStateRepair,
+    startPublicStateRepairPeer,
+    stopPublicStateRepairPeer,
     publishTaggedJson,
     publishEncryptedJson,
     publishSubmission,
