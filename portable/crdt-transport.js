@@ -62,6 +62,17 @@ export function createNostrCrdtBridge(config) {
     };
   }
 
+  function verifySignedEvent(eventTools, event) {
+    if (!event || typeof event !== "object") return false;
+    const structurallyValid = typeof eventTools?.validateEvent === "function"
+      ? eventTools.validateEvent(event)
+      : true;
+    if (!structurallyValid) return false;
+    return typeof eventTools?.verifyEvent === "function"
+      ? eventTools.verifyEvent(event)
+      : true;
+  }
+
   function createTransport(options = {}) {
     const urls = dedupe(Array.isArray(options.relays) ? options.relays : relayUrls());
     const waitMs = Number(options.timeoutMs || timeoutMs());
@@ -133,12 +144,14 @@ export function createNostrCrdtBridge(config) {
     bufferMs,
   }) {
     const signer = await createSigner(secretKeyHex);
+    const eventTools = await ensureTools();
     return createYjsSync({
       doc,
       namespace: namespace(),
       roomId: roomId(documentId),
       transport,
       signer,
+      verifyEvent: (event) => verifySignedEvent(eventTools, event),
       acceptEvent,
       onCheckpointRequest,
       kind,

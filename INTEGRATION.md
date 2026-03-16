@@ -87,6 +87,7 @@ That bridge is responsible for:
 - deriving room ids from the site namespace
 - creating a transport adapter on top of the existing relay toolchain
 - creating signers from the existing deterministic key model
+- verifying signed CRDT events before replay or live apply
 - creating Yjs sync instances without embedding application-specific trust rules
 
 The first intended consumer is static page units.
@@ -105,4 +106,5 @@ Its job is:
 - cache original signed public events in the browser
 - request repair when relay reads look incomplete
 - let other browsers rebroadcast cached original events
+- only merge or rebroadcast locally verified signed events
 - preserve verifiability by replaying the original events instead of inventing a second state source

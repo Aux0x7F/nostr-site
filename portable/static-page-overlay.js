@@ -34,14 +34,19 @@ export function createStaticPageOverlayApi(config) {
       });
     };
 
+    const emitRemoteContent = (origin = null) => {
+      const serialized = cloneContent(serializeContent(content));
+      onRemoteContent(serialized, {
+        pageId: cleanPageId,
+        hasLiveContent: Object.keys(serialized).length > 0,
+        origin,
+      });
+    };
+
     const handleContent = (event) => {
       if (destroyed) return;
       if (event?.transaction?.origin === LOCAL_ORIGIN) return;
-      onRemoteContent(cloneContent(serializeContent(content)), {
-        pageId: cleanPageId,
-        hasLiveContent: content.size > 0,
-        origin: event?.transaction?.origin || null,
-      });
+      emitRemoteContent(event?.transaction?.origin || null);
     };
 
     content.observe(handleContent);
@@ -58,14 +63,11 @@ export function createStaticPageOverlayApi(config) {
         onCheckpointRequest,
       });
       await sync.initialize();
-      onRemoteContent(cloneContent(serializeContent(content)), {
-        pageId: cleanPageId,
-        hasLiveContent: content.size > 0,
-        origin: "initial",
-      });
+      const hasLiveContent = Object.keys(serializeContent(content)).length > 0;
+      emitRemoteContent("initial");
       emitStatus(
         "connected",
-        content.size > 0 ? "Live page updates connected." : "No newer live page updates found."
+        hasLiveContent ? "Live page updates connected." : "No newer live page updates found."
       );
     } catch (error) {
       content.unobserve(handleContent);
@@ -79,7 +81,7 @@ export function createStaticPageOverlayApi(config) {
       documentId: documentId(cleanPageId),
       roomId: bridge.createRoomId(documentId(cleanPageId)),
       hasLiveContent() {
-        return content.size > 0;
+        return Object.keys(serializeContent(content)).length > 0;
       },
       getContent() {
         return cloneContent(serializeContent(content));
@@ -155,7 +157,7 @@ function normalizePageId(value) {
 function serializeContent(content) {
   const entries = [...content.entries()]
     .map(([key, value]) => [String(key || "").trim(), String(value || "")])
-    .filter(([key]) => key);
+    .filter(([key, value]) => key && value.length);
   return Object.fromEntries(entries);
 }
 
