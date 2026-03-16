@@ -212,13 +212,14 @@ function publicStateNeedsRepair(publicState) {
   const syncInfo = publicState.syncInfo && typeof publicState.syncInfo === "object"
     ? publicState.syncInfo
     : {};
+  const connected = Boolean(publicState.connected);
   const remoteEventCount = Number(syncInfo.remoteEventCount || 0) || 0;
   const cachedEventCount = Number(syncInfo.cachedEventCount || 0) || 0;
   const rawEventCount = Array.isArray(publicState.rawEvents) ? publicState.rawEvents.length : 0;
   if (!rawEventCount) return true;
-  if (!publicState.connected && cachedEventCount > 0) return true;
+  if (!connected && cachedEventCount > 0) return true;
   if (cachedEventCount > 0 && remoteEventCount === 0) return true;
-  return cachedEventCount > remoteEventCount * 2 && remoteEventCount < 24;
+  return false;
 }
 
 async function requestPublicStateRepair(secretKeyHex, options = {}) {
@@ -1809,12 +1810,44 @@ async function queryEvents(filters, options = {}) {
     const normalized = expandQueryFilters(
       (Array.isArray(filters) ? filters : [filters]).filter((filter) => filter && typeof filter === "object")
     );
-    const results = await Promise.allSettled(
-      normalized.map((filter) =>
-        withTimeout(pool.querySync(relays, filter, {}), timeoutMs)
-      )
-    );
     const merged = new Map();
+    if (!normalized.length) return [];
+    if (typeof pool.subscribeMap === "function") {
+      await withTimeout(
+        new Promise((resolve) => {
+          let settled = false;
+          let subscription = null;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          subscription = pool.subscribeMap(
+            relays.flatMap((url) => normalized.map((filter) => ({ url, filter }))),
+            {
+              maxWait: timeoutMs,
+              onevent(event) {
+                if (!isVerifiedPublicEvent(event)) return;
+                if (!merged.has(event.id)) merged.set(event.id, event);
+              },
+              oneose() {
+                Promise.resolve(subscription?.close?.("closed automatically on eose"))
+                  .catch(() => null)
+                  .finally(finish);
+              },
+              onclose() {
+                finish();
+              }
+            }
+          );
+        }),
+        timeoutMs + 200
+      );
+      return [...merged.values()];
+    }
+    const results = await Promise.allSettled(
+      normalized.map((filter) => withTimeout(pool.querySync(relays, filter, {}), timeoutMs))
+    );
     for (const result of results) {
       if (result.status !== "fulfilled") continue;
       for (const event of result.value) {

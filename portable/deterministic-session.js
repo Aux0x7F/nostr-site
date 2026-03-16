@@ -17,7 +17,8 @@ export function createDeterministicSessionApi(config, deps) {
       if (!parsed.username || !parsed.secretKeyHex) return null;
       return {
         username: normalizeUsername(parsed.username),
-        secretKeyHex: String(parsed.secretKeyHex || "").trim().toLowerCase()
+        secretKeyHex: String(parsed.secretKeyHex || "").trim().toLowerCase(),
+        pubkey: String(parsed.pubkey || "").trim().toLowerCase()
       };
     } catch {
       return null;
@@ -29,7 +30,8 @@ export function createDeterministicSessionApi(config, deps) {
       storageKey,
       JSON.stringify({
         username: normalizeUsername(session.username),
-        secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase()
+        secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase(),
+        pubkey: String(session.pubkey || "").trim().toLowerCase()
       })
     );
   }
