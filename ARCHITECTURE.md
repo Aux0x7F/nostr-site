@@ -31,7 +31,7 @@ Today, `nostr-site` already provides:
 - static-first rendering with relay-backed enrichment
 - generic CRDT transport bridge to `nostr-crdt`
 - generic static-page live overlay helper with host-provided trust rules
-- cached public-event replay and peer-assisted repair requests for partial relay reads
+- cached public-event replay and peer-assisted repair requests for partial relay reads, limited to locally verified signed events
 
 Today, `nostr-site` does not yet provide:
 
@@ -67,7 +67,7 @@ The framework also should not force a specific CRDT engine into all state. Only 
 
 `nostr-site` is where signer trust becomes product behavior.
 
-The generic transport may verify event shape and Nostr signatures, but `nostr-site` decides whether a signer is allowed to affect visible state.
+The generic transport verifies event shape and Nostr signatures, but `nostr-site` decides whether a signer is allowed to affect visible state.
 
 The intended trust rule is:
 

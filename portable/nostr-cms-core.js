@@ -3,6 +3,7 @@ let publicStatePromise = null;
 let toolsPromise = null;
 let publicStateRepairPeer = null;
 const handledPublicStateRepairRequests = new Set();
+const publicEventVerificationCache = new Map();
 const toolScriptPaths = {
   bundle: config?.nostr?.toolScriptPaths?.bundle || "./vendor/event-tools.bundle.js",
   shim: config?.nostr?.toolScriptPaths?.shim || "./vendor/event-tools-shim.js"
@@ -14,6 +15,36 @@ function getEventTools() {
 
 function hasNostrTools() {
   return Boolean(getEventTools());
+}
+
+function rememberPublicEventVerification(id, valid) {
+  if (!id) return valid;
+  publicEventVerificationCache.set(id, Boolean(valid));
+  if (publicEventVerificationCache.size <= 4096) return valid;
+  const values = [...publicEventVerificationCache.entries()];
+  publicEventVerificationCache.clear();
+  for (const [entryId, entryValid] of values.slice(-2048)) {
+    publicEventVerificationCache.set(entryId, entryValid);
+  }
+  return valid;
+}
+
+function isVerifiedPublicEvent(event) {
+  const normalized = normalizeCachedPublicEvent(event);
+  if (!normalized?.id) return false;
+  if (publicEventVerificationCache.has(normalized.id)) {
+    return publicEventVerificationCache.get(normalized.id) === true;
+  }
+  const tools = getEventTools();
+  if (!tools) return false;
+  const structurallyValid = typeof tools?.validateEvent === "function"
+    ? tools.validateEvent(normalized)
+    : true;
+  if (!structurallyValid) return rememberPublicEventVerification(normalized.id, false);
+  const signatureValid = typeof tools?.verifyEvent === "function"
+    ? tools.verifyEvent(normalized)
+    : true;
+  return rememberPublicEventVerification(normalized.id, signatureValid);
 }
 
 function ensureEventToolsLoaded() {
@@ -1507,7 +1538,10 @@ function loadCachedPublicEvents() {
     const raw = window.localStorage.getItem(publicEventCacheKey());
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeCachedPublicEvent).filter(Boolean).sort(compareEventDesc);
+    return parsed
+      .map(normalizeCachedPublicEvent)
+      .filter((event) => isVerifiedPublicEvent(event))
+      .sort(compareEventDesc);
   } catch {
     return [];
   }
@@ -1526,7 +1560,7 @@ function mergeCachedEvents(primary, secondary) {
   const merged = new Map();
   for (const event of [...(Array.isArray(primary) ? primary : []), ...(Array.isArray(secondary) ? secondary : [])]) {
     const normalized = normalizeCachedPublicEvent(event);
-    if (!normalized || !normalized.id) continue;
+    if (!normalized || !normalized.id || !isVerifiedPublicEvent(normalized)) continue;
     if (!merged.has(normalized.id)) merged.set(normalized.id, normalized);
   }
   return [...merged.values()].sort(compareEventDesc).slice(0, publicEventCacheLimit());
@@ -1568,6 +1602,7 @@ function publicRepairRepublishLimit() {
 }
 
 async function maybeRespondToPublicStateRepairRequest(event, relays, options = {}) {
+  if (!isVerifiedPublicEvent(event)) return;
   const decoded = parseObject(event?.content);
   const requestId = cleanSlug(decoded?.request_id || firstTag(event, "d"));
   if (!requestId || handledPublicStateRepairRequests.has(requestId)) return;
@@ -1605,7 +1640,7 @@ function selectRepairEvents(events, limit) {
   const max = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : publicRepairRepublishLimit();
   return [...(Array.isArray(events) ? events : [])]
     .map(normalizeCachedPublicEvent)
-    .filter(Boolean)
+    .filter((event) => isVerifiedPublicEvent(event))
     .sort((left, right) => {
       const priorityDelta = repairEventPriority(right) - repairEventPriority(left);
       if (priorityDelta !== 0) return priorityDelta;
@@ -1688,6 +1723,7 @@ async function queryEvents(filters, options = {}) {
     for (const result of results) {
       if (result.status !== "fulfilled") continue;
       for (const event of result.value) {
+        if (!isVerifiedPublicEvent(event)) continue;
         if (!merged.has(event.id)) merged.set(event.id, event);
       }
     }
