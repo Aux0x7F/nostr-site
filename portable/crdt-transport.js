@@ -82,12 +82,41 @@ export function createNostrCrdtBridge(config) {
         const eventTools = await ensureTools();
         const pool = new eventTools.SimplePool();
         try {
-          const responses = await Promise.allSettled(
-            normalizeFilters(filters).map((filter) =>
-              pool.querySync(urls, filter, { maxWait: waitMs })
-            )
-          );
           const events = new Map();
+          const normalized = normalizeFilters(filters);
+          if (!normalized.length) return [];
+          if (typeof pool.subscribeMap === "function") {
+            await new Promise((resolve) => {
+              let settled = false;
+              let subscription = null;
+              const finish = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+              };
+              subscription = pool.subscribeMap(
+                urls.flatMap((url) => normalized.map((filter) => ({ url, filter }))),
+                {
+                  maxWait: waitMs,
+                  onevent(event) {
+                    if (!events.has(event.id)) events.set(event.id, event);
+                  },
+                  oneose() {
+                    Promise.resolve(subscription?.close?.("closed automatically on eose"))
+                      .catch(() => null)
+                      .finally(finish);
+                  },
+                  onclose() {
+                    finish();
+                  }
+                }
+              );
+            });
+            return [...events.values()];
+          }
+          const responses = await Promise.allSettled(
+            normalized.map((filter) => pool.querySync(urls, filter, { maxWait: waitMs }))
+          );
           for (const response of responses) {
             if (response.status !== "fulfilled") continue;
             for (const event of response.value) {
@@ -118,12 +147,23 @@ export function createNostrCrdtBridge(config) {
       async subscribe(filters, onEvent) {
         const eventTools = await ensureTools();
         const pool = new eventTools.SimplePool();
-        const subscriptions = normalizeFilters(filters).map((filter) =>
-          pool.subscribe(urls, filter, {
-            onevent: (event) => onEvent(event),
-            maxWait: waitMs,
-          })
-        );
+        const normalized = normalizeFilters(filters);
+        const subscriptions = typeof pool.subscribeMap === "function"
+          ? [
+              pool.subscribeMap(
+                urls.flatMap((url) => normalized.map((filter) => ({ url, filter }))),
+                {
+                  onevent: (event) => onEvent(event),
+                  maxWait: waitMs,
+                }
+              )
+            ]
+          : normalized.map((filter) =>
+              pool.subscribe(urls, filter, {
+                onevent: (event) => onEvent(event),
+                maxWait: waitMs,
+              })
+            );
 
         return async () => {
           await Promise.all(subscriptions.map((subscription) => subscription.close("closed")));
