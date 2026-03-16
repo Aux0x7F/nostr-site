@@ -12,3 +12,7 @@ export {
   slugify,
   createUniqueSlug
 } from "../portable/content-docs.js";
+export {
+  sanitizeTrustedHtml,
+  sanitizeUrl
+} from "../portable/html-safety.js";

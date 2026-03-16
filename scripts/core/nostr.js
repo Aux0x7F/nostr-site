@@ -1,6 +1,7 @@
 import SITE from "./site-config.js";
 import { createNostrCmsClient } from "../../portable/nostr-cms-core.js";
 import { createBlobStoreApi } from "../../portable/blob-store.js";
+export { sanitizeTrustedHtml, sanitizeUrl } from "../../portable/html-safety.js";
 
 const client = createNostrCmsClient(SITE);
 const blobs = createBlobStoreApi(SITE, client);

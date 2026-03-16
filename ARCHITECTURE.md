@@ -32,6 +32,8 @@ Today, `nostr-site` already provides:
 - generic CRDT transport bridge to `nostr-crdt`
 - generic static-page live overlay helper with host-provided trust rules
 - cached public-event replay and peer-assisted repair requests for partial relay reads, limited to locally verified signed events
+- generic comment vote aggregation in public state
+- reusable trusted HTML sanitization helpers for host renderers
 
 Today, `nostr-site` does not yet provide:
 

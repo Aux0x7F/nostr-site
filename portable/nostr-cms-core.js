@@ -758,6 +758,11 @@ async function fetchPublicState() {
         limit: publicLimit
       },
       {
+        kinds: [config.nostr.kinds.commentVote],
+        "#t": [config.nostr.appTag],
+        limit: Math.max(800, publicLimit * 2)
+      },
+      {
         kinds: [config.nostr.kinds.visitPulse],
         "#t": [config.nostr.appTag],
         since: visitSince,
@@ -811,6 +816,7 @@ function buildPublicState(events, seedEntities = []) {
   const roles = [];
   const userModEvents = [];
   const commentModEvents = [];
+  const commentVoteEvents = [];
   const submissionStatusEvents = [];
   const snapshotEvents = [];
   const snapshotRequestEvents = [];
@@ -1088,6 +1094,32 @@ function buildPublicState(events, seedEntities = []) {
       continue;
     }
 
+    if (kind === config.nostr.kinds.commentVote) {
+      const payload = parseObject(event.content);
+      const targetId = String(payload?.target_id || firstTag(event, "e") || "").trim();
+      const rawValue = payload?.value ?? firstTag(event, "value") ?? firstTag(event, "v");
+      const op = String(payload?.op || firstTag(event, "op") || "").trim().toLowerCase();
+      let value = Number(rawValue);
+      if (!Number.isFinite(value)) {
+        value = op === "up" || op === "upvote"
+          ? 1
+          : op === "down" || op === "downvote"
+            ? -1
+            : op === "clear" || op === "remove" || op === "none"
+              ? 0
+              : Number.NaN;
+      }
+      if (!targetId || !Number.isFinite(value)) continue;
+      commentVoteEvents.push({
+        pubkey: normalizePubkey(event.pubkey),
+        target_id: targetId,
+        value: Math.max(-1, Math.min(1, Math.trunc(value))),
+        created_at: toUnix(event.created_at),
+        id: event.id
+      });
+      continue;
+    }
+
     if (kind === config.nostr.kinds.blobRequest) {
       const next = buildBlobEventState(event, "request");
       if (next) mergeLatest(blobRequests, blobReferenceKey(next), next);
@@ -1152,6 +1184,7 @@ function buildPublicState(events, seedEntities = []) {
   const siteInfo = computeSiteInfo(siteKeyEvents, admins);
   const moderation = computeLatestModeration(userModEvents, admins);
   const commentModeration = computeCommentModeration(commentModEvents, admins);
+  const commentVotes = computeCommentVotes(commentVoteEvents);
   const submissionStatuses = computeSubmissionStatuses(submissionStatusEvents, admins);
   const pendingAdminKeyRequests = computePendingAdminKeyRequests(
     adminKeyRequestEvents,
@@ -1190,10 +1223,14 @@ function buildPublicState(events, seedEntities = []) {
   const allComments = [...comments.values()]
     .map((comment) => {
       const mod = commentModeration.get(comment.id) || null;
+      const votes = commentVotes.get(comment.id) || emptyCommentVoteSummary();
       return {
         ...comment,
         visibility: mod?.action === "hide" ? "hidden" : "visible",
-        moderation: mod
+        moderation: mod,
+        score: votes.score,
+        upvoteCount: votes.upvoteCount,
+        downvoteCount: votes.downvoteCount
       };
     })
     .sort(compareEventAsc);
@@ -1269,6 +1306,7 @@ function buildPublicState(events, seedEntities = []) {
     commentsByPost,
     commentsByAuthor,
     commentModeration,
+    commentVotes,
     blobRequests,
     blobFulfillments,
     submissionStatuses,
@@ -1375,6 +1413,49 @@ function computeCommentModeration(events, admins) {
     });
   }
   return moderation;
+}
+
+function computeCommentVotes(events) {
+  const latestByVoter = new Map();
+  const sorted = [...events].sort((left, right) => {
+    if (left.created_at !== right.created_at) return left.created_at - right.created_at;
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+  for (const event of sorted) {
+    const voterPubkey = normalizePubkey(event.pubkey);
+    if (!voterPubkey || !event.target_id) continue;
+    latestByVoter.set(`${event.target_id}:${voterPubkey}`, {
+      ...event,
+      pubkey: voterPubkey
+    });
+  }
+
+  const votes = new Map();
+  for (const event of latestByVoter.values()) {
+    const summary = votes.get(event.target_id) || emptyCommentVoteSummary();
+    if (event.value > 0) {
+      summary.score += 1;
+      summary.upvoteCount += 1;
+      summary.byPubkey.set(event.pubkey, 1);
+    } else if (event.value < 0) {
+      summary.score -= 1;
+      summary.downvoteCount += 1;
+      summary.byPubkey.set(event.pubkey, -1);
+    }
+    summary.updated_at = Math.max(summary.updated_at, Number(event.created_at || 0) || 0);
+    votes.set(event.target_id, summary);
+  }
+  return votes;
+}
+
+function emptyCommentVoteSummary() {
+  return {
+    score: 0,
+    upvoteCount: 0,
+    downvoteCount: 0,
+    updated_at: 0,
+    byPubkey: new Map()
+  };
 }
 
 function computeSubmissionStatuses(events, admins) {
@@ -1486,6 +1567,7 @@ function emptyPublicState(error, seedEntities = []) {
     commentsByPost: new Map(),
     commentsByAuthor: new Map(),
     commentModeration: new Map(),
+    commentVotes: new Map(),
     blobRequests: new Map(),
     blobFulfillments: new Map(),
     submissionStatuses: new Map(),
