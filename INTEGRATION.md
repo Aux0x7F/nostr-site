@@ -75,6 +75,13 @@ The framework now exposes a generic CRDT bridge for host code:
 - `createNostrCrdtBridge(config)`
 - `createStaticPageOverlayApi(config)`
 
+The framework also exposes a public-state repair layer through `createNostrCmsClient(config)`:
+
+- `loadPublicState()`
+- `publicStateNeedsRepair(publicState)`
+- `requestPublicStateRepair(secretKeyHex, options)`
+- `startPublicStateRepairPeer()`
+
 That bridge is responsible for:
 
 - deriving room ids from the site namespace
@@ -90,3 +97,12 @@ The first intended consumer is static page units.
 - trusted signer filtering via host-provided admin lookup
 - read-only live overlay for visitors
 - explicit publish hooks for admin-authored page changes
+
+The public-state repair layer is intentionally separate from CRDT unit sync.
+
+Its job is:
+
+- cache original signed public events in the browser
+- request repair when relay reads look incomplete
+- let other browsers rebroadcast cached original events
+- preserve verifiability by replaying the original events instead of inventing a second state source
