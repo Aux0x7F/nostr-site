@@ -481,15 +481,15 @@ async function renderComments(postSlug, publicState) {
   const panel = document.querySelector("[data-comment-panel]");
   if (!panel) return;
 
-  const comments = publicState.commentsByPost.get(postSlug) || [];
-  const threadedComments = buildCommentTree(comments);
+  const threadedComments = (publicState.commentThreadsByPost?.get(postSlug) || []).slice();
+  const renderedCount = countRenderedCommentNodes(threadedComments);
   const isLoggedIn = Boolean(state.session);
   const isAdmin = Boolean(state.viewer && publicState.admins.includes(state.viewer.pubkey));
   const currentUser = isLoggedIn && state.viewer
     ? publicState.users.find((user) => user.pubkey === state.viewer.pubkey) || null
     : null;
   const replyTarget = state.commentReply?.postSlug === postSlug
-    ? comments.find((comment) => comment.id === state.commentReply.commentId) || null
+    ? publicState.commentIndex?.get(state.commentReply.commentId) || null
     : null;
   if (state.commentReply?.postSlug === postSlug && !replyTarget) {
     state.commentReply = null;
@@ -501,7 +501,7 @@ async function renderComments(postSlug, publicState) {
         <div class="eyebrow">Discussion</div>
         <h2>Comments</h2>
       </div>
-      <p>${renderCommentCountLabel(comments.length)}</p>
+      <p>${renderCommentCountLabel(renderedCount)}</p>
     </div>
     ${
       isLoggedIn
@@ -672,60 +672,11 @@ function renderComment(comment, publicState, options = {}, depth = 0) {
   `;
 }
 
-function buildCommentTree(comments) {
-  const nodes = new Map(
-    (Array.isArray(comments) ? comments : []).map((comment) => [
-      comment.id,
-      {
-        ...comment,
-        replies: []
-      }
-    ])
+function countRenderedCommentNodes(nodes) {
+  return (Array.isArray(nodes) ? nodes : []).reduce(
+    (total, node) => total + 1 + countRenderedCommentNodes(node?.replies || []),
+    0
   );
-  const roots = [];
-  for (const node of nodes.values()) {
-    const parentId = String(node.parent_id || "").trim();
-    if (!parentId) {
-      roots.push(node);
-      continue;
-    }
-    const parent = nodes.get(parentId);
-    if (isCommentThreadAnchor(parent, node)) {
-      if (!node.root_id) node.root_id = parent.root_id || parent.id;
-      parent.replies.push(node);
-      continue;
-    }
-    const rootId = String(node.root_id || "").trim();
-    const threadRoot = rootId ? nodes.get(rootId) : null;
-    if (isCommentThreadAnchor(threadRoot, node)) {
-      node.root_id = threadRoot.id;
-      threadRoot.replies.push(node);
-    }
-  }
-  sortCommentNodes(roots);
-  return roots;
-}
-
-function isCommentThreadAnchor(anchor, node) {
-  return Boolean(
-    anchor &&
-    node &&
-    anchor.id !== node.id &&
-    String(anchor.post_slug || "").trim() &&
-    String(anchor.post_slug || "").trim() === String(node.post_slug || "").trim()
-  );
-}
-
-function sortCommentNodes(nodes) {
-  nodes.sort((left, right) => {
-    const leftTime = Number(left?.created_at || 0);
-    const rightTime = Number(right?.created_at || 0);
-    if (leftTime !== rightTime) return leftTime - rightTime;
-    return String(left?.id || "").localeCompare(String(right?.id || ""));
-  });
-  for (const node of nodes) {
-    if (Array.isArray(node.replies) && node.replies.length) sortCommentNodes(node.replies);
-  }
 }
 
 function renderCommentCountLabel(count) {
@@ -1417,6 +1368,8 @@ async function getPublicState() {
       connected: false,
       approvedEntities: [],
       commentsByPost: new Map(),
+      commentIndex: new Map(),
+      commentThreadsByPost: new Map(),
       admins: []
     };
     return state.publicState;

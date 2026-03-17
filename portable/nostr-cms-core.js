@@ -1,3 +1,5 @@
+import { buildCommentThreadState } from "./comment-state.js";
+
 export function createNostrCmsClient(config) {
 let publicStatePromise = null;
 let toolsPromise = null;
@@ -1252,6 +1254,7 @@ function buildPublicState(events, seedEntities = []) {
   const hiddenComments = allComments.filter((comment) => comment.visibility === "hidden");
   const commentsByPost = groupBy(visibleComments, "post_slug");
   const commentsByAuthor = groupBy(visibleComments, "author");
+  const commentThreadState = buildCommentThreadState(visibleComments);
 
   const submissionCountByAuthor = new Map();
   for (const entry of submissionCounters.values()) {
@@ -1319,6 +1322,10 @@ function buildPublicState(events, seedEntities = []) {
     hiddenComments,
     commentsByPost,
     commentsByAuthor,
+    commentIndex: commentThreadState.commentsById,
+    commentChildrenByParent: commentThreadState.childrenByParent,
+    commentThreadsByPost: commentThreadState.threadsByPost,
+    commentOrphansByPost: commentThreadState.orphansByPost,
     commentModeration,
     commentVotes,
     blobRequests,
@@ -1580,6 +1587,10 @@ function emptyPublicState(error, seedEntities = []) {
     hiddenComments: [],
     commentsByPost: new Map(),
     commentsByAuthor: new Map(),
+    commentIndex: new Map(),
+    commentChildrenByParent: new Map(),
+    commentThreadsByPost: new Map(),
+    commentOrphansByPost: new Map(),
     commentModeration: new Map(),
     commentVotes: new Map(),
     blobRequests: new Map(),

@@ -1,6 +1,11 @@
 import SITE from "./site-config.js";
 import { createNostrCmsClient } from "../../portable/nostr-cms-core.js";
 import { createBlobStoreApi } from "../../portable/blob-store.js";
+export {
+  buildCommentThreadState,
+  compareCommentRepliesChronologically,
+  compareCommentRootsByScore
+} from "../../portable/comment-state.js";
 import { createStructuredUnitOverlayApi } from "../../portable/structured-unit-overlay.js";
 export { sanitizeTrustedHtml, sanitizeUrl } from "../../portable/html-safety.js";
 
