@@ -18,6 +18,7 @@ export const {
   deriveIdentity,
   generateSecretKeyHex,
   resolveSitePubkey,
+  getCachedPublicState,
   loadPublicState,
   publicStateNeedsRepair,
   requestPublicStateRepair,
