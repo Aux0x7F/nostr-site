@@ -111,8 +111,8 @@ export function createBlobStoreApi(config, deps) {
     const originalType = String(options.type || blob.type || "application/octet-stream").trim() || "application/octet-stream";
     const baseUrl = resolveBlobBaseUrl();
     const tools = await ensureEventToolsLoaded();
-    const { finalizeEvent, nip04, nip98 } = tools;
-    if (!finalizeEvent || !nip98?.getToken) {
+    const { finalizeEvent, nip04 } = tools;
+    if (!finalizeEvent) {
       throw new Error("Blob upload auth helpers are unavailable.");
     }
 
@@ -142,17 +142,16 @@ export function createBlobStoreApi(config, deps) {
     }
 
     const uploadUrl = new URL("upload", ensureTrailingSlash(baseUrl)).toString();
-    const authToken = await nip98.getToken(
-      uploadUrl,
-      "PUT",
-      async (template) => finalizeEvent(template, identity.secretKey),
-      true,
-      bodyBytes
-    );
+    const blobSha256 = await sha256Hex(bodyBytes);
+    const authToken = await createUploadAuthToken(identity.secretKey, finalizeEvent, {
+      sha256: blobSha256,
+      server: baseUrl
+    });
 
     const response = await fetch(uploadUrl, {
       method: "PUT",
       headers: buildUploadHeaders(uploadUrl, authToken, uploadType, {
+        sha256: blobSha256,
         fileName,
         purpose: options.purpose || "",
         visibility: options.visibility || "public"
@@ -293,7 +292,8 @@ function cleanHeader(value) {
 function buildUploadHeaders(uploadUrl, authToken, uploadType, metadata = {}) {
   const headers = {
     Authorization: authToken,
-    "Content-Type": uploadType
+    "Content-Type": uploadType,
+    "X-SHA-256": cleanHeader(metadata.sha256 || "")
   };
   if (!shouldSendBlobMetadataHeaders(uploadUrl)) return headers;
   headers["X-Blob-Name"] = encodeURIComponent(metadata.fileName || "upload.bin");
@@ -313,6 +313,59 @@ function shouldSendBlobMetadataHeaders(uploadUrl) {
 
 function shouldRequestRefresh(status) {
   return Number(status) === 404 || Number(status) === 410;
+}
+
+async function createUploadAuthToken(secretKey, finalizeEvent, options = {}) {
+  const sha256 = String(options.sha256 || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Blob upload is missing a valid sha256.");
+  const expiration = Math.floor(Date.now() / 1000) + 60 * 60;
+  const event = {
+    kind: 24242,
+    created_at: Math.round(Date.now() / 1000),
+    tags: [
+      ["t", "upload"],
+      ["x", sha256],
+      ["expiration", String(expiration)]
+    ],
+    content: "Upload Blob"
+  };
+  const server = normalizeServerTag(options.server);
+  if (server) {
+    event.tags.push(["server", server]);
+  }
+  const signedEvent = finalizeEvent(event, secretKey);
+  return `Nostr ${utf8JsonToBase64(signedEvent)}`;
+}
+
+async function sha256Hex(payloadBytes) {
+  if (!(payloadBytes instanceof Uint8Array)) return "";
+  const digest = await crypto.subtle.digest("SHA-256", payloadBytes);
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function utf8JsonToBase64(value) {
+  const encoded = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  const chunkSize = 32768;
+  for (let index = 0; index < encoded.length; index += chunkSize) {
+    binary += String.fromCharCode(...encoded.subarray(index, index + chunkSize));
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function normalizeServerTag(value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  try {
+    return String(new URL(input).hostname || "").trim().toLowerCase();
+  } catch {
+    return input.toLowerCase();
+  }
 }
 
 function protocolName(config, suffix) {

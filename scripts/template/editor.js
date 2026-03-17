@@ -4,6 +4,7 @@ import {
   cleanSlug,
   deriveIdentity,
   ensureEventToolsLoaded,
+  getCachedPublicState,
   loadPublicState,
   publishTaggedJson
 } from "../core/nostr.js";
@@ -43,9 +44,15 @@ async function initEditorPage(force = false) {
     renderEditorShell();
     return;
   }
-  renderEditorLoading("Looking up editor...");
   await ensureEventToolsLoaded();
   editorState.viewer = deriveIdentity(editorState.session.secretKeyHex);
+  const cachedPublicState = !force ? getCachedPublicState() : null;
+  if (cachedPublicState && editorUserIsAdmin(cachedPublicState, editorState.viewer?.pubkey)) {
+    editorState.publicState = cachedPublicState;
+    renderEditorShell();
+  } else {
+    renderEditorLoading("Looking up editor...");
+  }
   editorState.publicState = await loadPublicState(force);
   editorState.staticSlugs = await loadStaticSlugs().catch(() => []);
   renderEditorShell();
@@ -865,7 +872,15 @@ async function loadStaticSlugs() {
 }
 
 function currentUserIsAdmin() {
-  return Boolean(editorState.viewer && editorState.publicState?.admins?.includes(editorState.viewer.pubkey));
+  return editorUserIsAdmin(editorState.publicState, editorState.viewer?.pubkey);
+}
+
+function editorUserIsAdmin(publicState, pubkey = "") {
+  const cleanPubkey = String(pubkey || "").trim().toLowerCase();
+  if (!cleanPubkey) return false;
+  const admins = new Set(Array.isArray(publicState?.admins) ? publicState.admins : []);
+  const rootAdminPubkey = String(publicState?.rootAdminPubkey || SITE.nostr.rootAdminPubkey || "").trim().toLowerCase();
+  return admins.has(cleanPubkey) || (rootAdminPubkey && rootAdminPubkey === cleanPubkey);
 }
 
 function loadLocalDocument(slug) {
