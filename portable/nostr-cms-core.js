@@ -1,3 +1,133 @@
+import { buildCommentThreadState } from "./comment-state.js";
+
+function parseCommentObject(content) {
+  try {
+    const parsed = JSON.parse(String(content || ""));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanCommentSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeCommentPubkey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function firstCommentTag(event, key) {
+  const tag = (event?.tags || []).find((item) => Array.isArray(item) && item[0] === key);
+  return tag ? String(tag[1] || "") : "";
+}
+
+function toCommentUnix(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function stripTransientPublicStateFields(value, key = "") {
+  if (key === "rawEvents" || key === "_event" || key === "event") return undefined;
+  if (value instanceof Map) {
+    return new Map(
+      [...value.entries()]
+        .map(([entryKey, entryValue]) => [entryKey, stripTransientPublicStateFields(entryValue)])
+        .filter(([, entryValue]) => entryValue !== undefined)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripTransientPublicStateFields(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (value && typeof value === "object") {
+    const next = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+      const stripped = stripTransientPublicStateFields(entryValue, entryKey);
+      if (stripped !== undefined) next[entryKey] = stripped;
+    }
+    return next;
+  }
+  return value;
+}
+
+function snapshotSerializeValue(value) {
+  if (value instanceof Map) {
+    return {
+      __nostrSiteType: "Map",
+      entries: [...value.entries()].map(([key, entryValue]) => [
+        snapshotSerializeValue(key),
+        snapshotSerializeValue(entryValue)
+      ])
+    };
+  }
+  if (Array.isArray(value)) return value.map((entry) => snapshotSerializeValue(entry));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, snapshotSerializeValue(entryValue)])
+    );
+  }
+  return value;
+}
+
+function snapshotDeserializeValue(value) {
+  if (Array.isArray(value)) return value.map((entry) => snapshotDeserializeValue(entry));
+  if (value && typeof value === "object") {
+    if (value.__nostrSiteType === "Map") {
+      return new Map(
+        (Array.isArray(value.entries) ? value.entries : []).map(([key, entryValue]) => [
+          snapshotDeserializeValue(key),
+          snapshotDeserializeValue(entryValue)
+        ])
+      );
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, snapshotDeserializeValue(entryValue)])
+    );
+  }
+  return value;
+}
+
+export function parsePublicCommentEvent(event) {
+  const payload = parseCommentObject(event?.content);
+  const postSlug = cleanCommentSlug(payload?.post_slug || firstCommentTag(event, "a"));
+  if (!postSlug) return null;
+  const parentId = String(payload?.parent_id || firstCommentTag(event, "parent") || firstCommentTag(event, "e") || "").trim();
+  const rootId = String(payload?.root_id || firstCommentTag(event, "root") || "").trim();
+  const eventId = String(event?.id || "").trim();
+  if (!eventId) return null;
+  return {
+    id: eventId,
+    post_slug: postSlug,
+    author: normalizeCommentPubkey(event?.pubkey),
+    markdown: String(payload?.markdown || payload?.body || "").trim(),
+    parent_id: parentId,
+    root_id: rootId || (parentId ? parentId : ""),
+    created_at: toCommentUnix(event?.created_at),
+    id_event: eventId,
+    _event: event
+  };
+}
+
+export function serializePublicStateSnapshot(publicState) {
+  return JSON.stringify(snapshotSerializeValue(stripTransientPublicStateFields(publicState)));
+}
+
+export function deserializePublicStateSnapshot(raw) {
+  if (!raw) return null;
+  try {
+    return snapshotDeserializeValue(JSON.parse(String(raw)));
+  } catch {
+    return null;
+  }
+}
+
 export function createNostrCmsClient(config) {
 let publicStatePromise = null;
 let toolsPromise = null;
@@ -195,9 +325,20 @@ async function loadPublicState(force = false) {
 }
 
 function getCachedPublicState() {
+  const cachedSnapshot = loadCachedPublicStateSnapshot();
+  if (cachedSnapshot) {
+    return withPublicStateSyncInfo(cachedSnapshot, {
+      connected: false,
+      error: "Showing cached public state.",
+      remoteEventCount: 0,
+      cachedEventCount: Array.isArray(cachedSnapshot?.rawEvents) ? cachedSnapshot.rawEvents.length : 0,
+      mergedEventCount: Array.isArray(cachedSnapshot?.rawEvents) ? cachedSnapshot.rawEvents.length : 0
+    });
+  }
   const cachedEvents = loadCachedPublicEvents();
   if (!cachedEvents.length) return null;
   const publicState = buildPublicState(cachedEvents, []);
+  persistCachedPublicStateSnapshot(publicState);
   return withPublicStateSyncInfo(publicState, {
     connected: false,
     error: "Showing cached public state.",
@@ -803,6 +944,7 @@ async function fetchPublicState() {
     const mergedEvents = mergeCachedEvents(remoteEvents, cachedEvents);
     persistCachedPublicEvents(mergedEvents);
     const publicState = buildPublicState(mergedEvents, seedEntities);
+    persistCachedPublicStateSnapshot(publicState);
     return withPublicStateSyncInfo(publicState, {
       connected: remoteEvents.length > 0,
       error: remoteEvents.length ? "" : cachedEvents.length ? "Live relay data incomplete. Showing cached public state." : "",
@@ -813,6 +955,7 @@ async function fetchPublicState() {
   } catch (error) {
     if (cachedEvents.length) {
       const publicState = buildPublicState(cachedEvents, seedEntities);
+      persistCachedPublicStateSnapshot(publicState);
       return withPublicStateSyncInfo(publicState, {
         connected: false,
         error: String(error?.message || error || "Relay timeout."),
@@ -1087,24 +1230,9 @@ function buildPublicState(events, seedEntities = []) {
     }
 
     if (kind === config.nostr.kinds.comment) {
-      const payload = parseObject(event.content);
-      const commentId = firstTag(event, "d") || event.id;
-      const postSlug = cleanSlug(payload?.post_slug || firstTag(event, "a"));
-      if (!postSlug) continue;
-      const parentId = String(payload?.parent_id || firstTag(event, "parent") || firstTag(event, "e") || "").trim();
-      const rootId = String(payload?.root_id || firstTag(event, "root") || "").trim();
-      const next = {
-        id: commentId,
-        post_slug: postSlug,
-        author: normalizePubkey(event.pubkey),
-        markdown: String(payload?.markdown || payload?.body || "").trim(),
-        parent_id: parentId,
-        root_id: rootId || (parentId ? parentId : ""),
-        created_at: toUnix(event.created_at),
-        id_event: event.id,
-        _event: event
-      };
-      mergeLatest(comments, commentId, next);
+      const next = parsePublicCommentEvent(event);
+      if (!next) continue;
+      mergeLatest(comments, next.id, next);
       continue;
     }
 
@@ -1252,6 +1380,7 @@ function buildPublicState(events, seedEntities = []) {
   const hiddenComments = allComments.filter((comment) => comment.visibility === "hidden");
   const commentsByPost = groupBy(visibleComments, "post_slug");
   const commentsByAuthor = groupBy(visibleComments, "author");
+  const commentThreadState = buildCommentThreadState(visibleComments);
 
   const submissionCountByAuthor = new Map();
   for (const entry of submissionCounters.values()) {
@@ -1319,6 +1448,10 @@ function buildPublicState(events, seedEntities = []) {
     hiddenComments,
     commentsByPost,
     commentsByAuthor,
+    commentIndex: commentThreadState.commentsById,
+    commentChildrenByParent: commentThreadState.childrenByParent,
+    commentThreadsByPost: commentThreadState.threadsByPost,
+    commentOrphansByPost: commentThreadState.orphansByPost,
     commentModeration,
     commentVotes,
     blobRequests,
@@ -1580,6 +1713,10 @@ function emptyPublicState(error, seedEntities = []) {
     hiddenComments: [],
     commentsByPost: new Map(),
     commentsByAuthor: new Map(),
+    commentIndex: new Map(),
+    commentChildrenByParent: new Map(),
+    commentThreadsByPost: new Map(),
+    commentOrphansByPost: new Map(),
     commentModeration: new Map(),
     commentVotes: new Map(),
     blobRequests: new Map(),
@@ -1643,6 +1780,23 @@ function loadCachedPublicEvents() {
   }
 }
 
+function loadCachedPublicStateSnapshot() {
+  try {
+    return deserializePublicStateSnapshot(window.localStorage.getItem(publicStateSnapshotKey()));
+  } catch {
+    return null;
+  }
+}
+
+function persistCachedPublicStateSnapshot(publicState) {
+  try {
+    if (!publicState || typeof publicState !== "object") return;
+    window.localStorage.setItem(publicStateSnapshotKey(), serializePublicStateSnapshot(publicState));
+  } catch {
+    return;
+  }
+}
+
 function persistCachedPublicEvents(events) {
   try {
     const normalized = mergeCachedEvents(events, []);
@@ -1685,6 +1839,10 @@ function normalizeCachedPublicEvent(event) {
 
 function publicEventCacheKey() {
   return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-event-cache`;
+}
+
+function publicStateSnapshotKey() {
+  return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-state-snapshot`;
 }
 
 function publicEventCacheLimit() {

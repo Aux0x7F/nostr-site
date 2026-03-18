@@ -9,7 +9,6 @@ import {
   loadAdminKeyShare,
   loadAdminKeyShares,
   loadInboxSubmissions,
-  loadPublicState,
   lookupUsers,
   loadSubmissionThread,
   normalizeUsername,
@@ -22,7 +21,28 @@ import {
   shortKey,
   uploadPublicBlob
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
+import {
+  renderChatModal as renderWorkspaceChatModal,
+  renderEntityModal as renderWorkspaceEntityModal,
+  renderLookupCandidate as renderWorkspaceLookupCandidate,
+  renderModerationComment as renderWorkspaceModerationComment,
+  renderSubmissionCard as renderWorkspaceSubmissionCard,
+  renderUserCard as renderWorkspaceUserCard
+} from "./surfaces/workspace-actions.js";
+import {
+  renderEntityPickerResultsMarkup,
+  renderLocationResultsMarkup
+} from "./surfaces/workspace-filters.js";
+import { renderWorkspaceView } from "./surfaces/workspace.js";
+
+const workspacePublicStateStore = createPublicStateStore({
+  getSessionSecretKey: async () => workspaceState.session?.secretKeyHex || "",
+  page: "workspace",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
 
 const workspaceState = {
   session: getStoredSession(),
@@ -48,6 +68,11 @@ const workspaceState = {
   respondedKeyRequests: new Set(),
   keyRequestCache: null
 };
+
+workspaceState.publicState = workspacePublicStateStore.value;
+workspacePublicStateStore.subscribe((snapshot) => {
+  workspaceState.publicState = snapshot.value;
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.querySelector("[data-workspace-page]")) return;
@@ -260,12 +285,13 @@ async function hydrateWorkspaceState(force = false) {
     ? deriveIdentity(workspaceState.session.secretKeyHex)
     : null;
   const cachedShares = loadCachedSiteKeyShares();
-  const [publicState, remoteShares] = await Promise.all([
-    loadPublicState(force),
+  const [publicStateResult, remoteShares] = await Promise.all([
+    workspacePublicStateStore.hydrate({ force, reason: force ? "workspace-force" : "workspace-hydrate" }),
     workspaceState.session
       ? loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
       : Promise.resolve([])
   ]);
+  const publicState = publicStateResult.value;
   workspaceState.publicState = publicState;
   const activeSitePubkey = resolveSitePubkey(workspaceState.publicState);
   let mergedShares = mergeSiteKeyShares(remoteShares, cachedShares);
@@ -383,286 +409,72 @@ function renderWorkspace(options = {}) {
   const title = document.querySelector("[data-workspace-title]");
   const lede = document.querySelector("[data-workspace-lede]");
   if (!shell || !title || !lede) return;
-
-  if (!workspaceState.session) {
-    title.textContent = "Log in";
-    lede.textContent = "Use the same username and password each time to return to this account.";
-    shell.innerHTML = renderLoginPane();
-    return;
-  }
-
-  const admin = currentUserIsAdmin();
-  title.textContent = admin ? "Workspace" : "Profile options";
-  lede.textContent = admin
-    ? "Manage users, submissions, entities, and post review."
-    : "Update your profile and review your comments.";
-
-  const tabsMarkup = tabButtons().map((tab) => renderTabButton(tab)).join("");
-  const paneMarkup = renderActivePane();
-  const overlayMarkup = `${renderEntityModal()}${renderChatModal()}`;
+  const surfaceDeps = workspaceSurfaceDeps();
+  const view = renderWorkspaceView({
+    workspaceState,
+    deps: surfaceDeps
+  });
+  title.textContent = view.title;
+  lede.textContent = view.lede;
   const tabs = shell.querySelector("[data-workspace-tabs]");
   const pane = shell.querySelector("[data-workspace-pane]");
   const overlays = shell.querySelector("[data-workspace-overlays]");
 
   if (soft && tabs && pane && overlays) {
-    tabs.innerHTML = tabsMarkup;
-    pane.innerHTML = paneMarkup;
-    overlays.innerHTML = overlayMarkup;
+    tabs.innerHTML = view.tabsMarkup;
+    pane.innerHTML = view.paneMarkup;
+    overlays.innerHTML = view.overlayMarkup;
   } else {
     shell.innerHTML = `
       <div class="workspace-tabs" data-workspace-tabs>
-        ${tabsMarkup}
+        ${view.tabsMarkup}
       </div>
       <div class="workspace-pane" data-workspace-pane>
-        ${paneMarkup}
+        ${view.paneMarkup}
       </div>
       <div data-workspace-overlays>
-        ${overlayMarkup}
+        ${view.overlayMarkup}
       </div>
     `;
   }
   hydrateWorkspaceEnhancements();
 }
 
-function renderLoginPane() {
-  return `
-    <section class="surface-panel workspace-auth">
-      <form class="tip-form" data-login-form>
-        <label>
-          <span>Username</span>
-          <input name="username" type="text" maxlength="40" placeholder="username" required>
-        </label>
-        <label>
-          <span>Password</span>
-          <input name="password" type="password" maxlength="120" placeholder="••••••••" required>
-        </label>
-        <div class="button-row">
-          <button class="button" type="submit" data-login-submit>Create/Login</button>
-        </div>
-        <div class="status-box" data-workspace-status>This site uses your username and password to reopen the same account.</div>
-      </form>
-    </section>
-  `;
+function workspaceSurfaceDeps() {
+  const actionDeps = workspaceActionSurfaceDeps();
+  return {
+    tabButtons,
+    renderTabButton,
+    currentUserIsAdmin,
+    currentUserHasInboxAccess,
+    currentUserPendingKeyRequest,
+    currentUser,
+    escapeHtml,
+    escapeAttribute,
+    renderSnapshotSummary,
+    renderLookupCandidate: () => renderWorkspaceLookupCandidate(workspaceState, actionDeps),
+    renderUserCard: (user) => renderWorkspaceUserCard(user, workspaceState, actionDeps),
+    renderSubmissionCard: (item) => renderWorkspaceSubmissionCard(item, workspaceState, actionDeps),
+    renderReviewCard,
+    renderReviewedCard,
+    renderModerationComment: (comment) => renderWorkspaceModerationComment(comment, workspaceState, actionDeps),
+    renderEntityModal: () => renderWorkspaceEntityModal(workspaceState, actionDeps),
+    renderChatModal: () => renderWorkspaceChatModal(workspaceState, actionDeps),
+    renderLogPane,
+    trimmed
+  };
 }
 
-function renderActivePane() {
-  switch (workspaceState.activeTab) {
-    case "dashboard":
-      return renderDashboardPane();
-    case "users":
-      return renderUsersPane();
-    case "submissions":
-      return renderSubmissionsPane();
-    case "entities":
-      return renderEntitiesPane();
-    case "review":
-      return renderReviewPane();
-    case "log":
-      return renderLogPane();
-    case "comments":
-      return renderCommentsPane();
-    case "profile":
-    default:
-      return renderProfilePane();
-  }
-}
-
-function renderDashboardPane() {
-  const metrics = workspaceState.publicState?.metrics || {};
-  const locationCount = new Set(
-    (workspaceState.publicState?.approvedEntities || []).map((entity) => entity.location).filter(Boolean)
-  ).size;
-  const snapshot = workspaceState.publicState?.snapshotInfo || null;
-  return `
-    <div class="workspace-grid">
-      <section class="metric-grid">
-        <article class="metric-card"><strong>${metrics.visitorCount24h || 0}</strong><p>Visitors (24h)</p></article>
-        <article class="metric-card"><strong>${metrics.visitorCount7d || 0}</strong><p>Visitors (7d)</p></article>
-        <article class="metric-card"><strong>${metrics.userCount || 0}</strong><p>Known users</p></article>
-        <article class="metric-card"><strong>${metrics.submissionCount || 0}</strong><p>Submission threads</p></article>
-        <article class="metric-card"><strong>${locationCount}</strong><p>Tracked locations</p></article>
-        <article class="metric-card"><strong>${metrics.approvedEntityCount || 0}</strong><p>Approved entities</p></article>
-        <article class="metric-card"><strong>${metrics.commentCount || 0}</strong><p>Visible comments</p></article>
-        <article class="metric-card"><strong>${metrics.visitEventCount7d || 0}</strong><p>Visit pulses (7d)</p></article>
-      </section>
-      <section class="surface-panel">
-        <div class="eyebrow">Snapshot</div>
-        <h2>Static snapshot</h2>
-        <p class="muted-text">Create a static snapshot of approved entities and posts. If GitHub is connected, this can also open or update a review PR.</p>
-        <div class="button-row">
-          <button class="button" type="button" data-request-snapshot>Create snapshot</button>
-        </div>
-        <div class="status-box">${escapeHtml(workspaceState.dashboardStatus || "No snapshot request sent yet.")}</div>
-        ${renderSnapshotSummary(snapshot)}
-      </section>
-    </div>
-  `;
-}
-
-function renderProfilePane() {
-  const current = currentUser();
-  const socialLinks = Array.isArray(current?.socialLinks) ? current.socialLinks : [];
-  const displayName = current?.displayName || current?.username || "Unnamed account";
-  const usernameLabel = current?.username ? `@${escapeHtml(current.username)}` : "No username saved yet.";
-  const roleLabel = currentUserIsAdmin() ? "Admin access" : "Member access";
-  return `
-    <div class="workspace-grid">
-      <section class="surface-panel">
-        <div class="eyebrow">Profile</div>
-        <h2>Profile settings</h2>
-        <form class="tip-form" data-profile-form>
-          <label>
-            <span>Display name</span>
-            <input name="displayName" type="text" maxlength="80" value="${escapeAttribute(current?.displayName || "")}">
-          </label>
-          <label>
-            <span>Bio</span>
-            <textarea name="bio" placeholder="Short bio">${escapeHtml(current?.bio || "")}</textarea>
-          </label>
-          <label>
-            <span>Avatar</span>
-            <input name="avatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif">
-          </label>
-          <label>
-            <span>Social links</span>
-            <textarea name="socialLinks" placeholder="One URL per line">${escapeHtml((current?.socialLinks || []).join("\n"))}</textarea>
-          </label>
-          <div class="button-row">
-            <button class="button" type="submit">Save profile</button>
-          </div>
-          <div class="status-box" data-workspace-status>Save changes to update your public profile.</div>
-        </form>
-      </section>
-      <section class="surface-panel">
-        <div class="eyebrow">Account</div>
-        <h2>Current account</h2>
-        <div class="roster-list">
-          <article class="roster-item">
-            <strong>${escapeHtml(displayName)}</strong>
-            <span>${usernameLabel}</span>
-            <span>${escapeHtml(roleLabel)}</span>
-            <span class="mono">${escapeHtml(workspaceState.viewer?.pubkey || "")}</span>
-          </article>
-          ${
-            socialLinks.length
-              ? socialLinks
-                  .map(
-                    (link) => `
-                      <article class="roster-item">
-                        <strong>Social link</strong>
-                        <a class="text-link" href="${escapeAttribute(link)}" target="_blank" rel="noreferrer">${escapeHtml(link)}</a>
-                      </article>
-                    `
-                  )
-                  .join("")
-              : `<div class="empty-state">No social links added yet.</div>`
-          }
-        </div>
-        ${currentUserIsAdmin() ? `<p class="muted-text">${renderSiteKeyShareStatus()}</p>` : ""}
-      </section>
-    </div>
-  `;
-}
-
-function renderUsersPane() {
-  return `
-    <div class="workspace-grid">
-      <section class="surface-panel">
-        <div class="eyebrow">Find user</div>
-        <h2>Lookup by username or pubkey</h2>
-        <p class="muted-text">Use a username when the roster is behind. If you already have the pubkey, you can act on it directly.</p>
-        <label>
-          <span>Username or pubkey</span>
-          <input data-quick-user-input type="text" maxlength="80" placeholder="aux or 64-character pubkey" value="${escapeAttribute(workspaceState.userLookupQuery || "")}">
-        </label>
-        <div class="button-row button-row--tight">
-          <button class="button-ghost" type="button" data-find-user>Find user</button>
-          <button class="button-ghost" type="button" data-quick-user-action="admin" data-mode="grant">Make admin</button>
-          ${
-            workspaceState.siteKeyShare
-              ? `<button class="button-ghost" type="button" data-quick-user-action="share-site-key">Share current key</button>`
-              : ""
-          }
-        </div>
-        <div class="status-box">${escapeHtml(workspaceState.userDirectStatus || "Find a user first, or paste a pubkey to act directly.")}</div>
-        ${renderLookupCandidate()}
-      </section>
-      <section class="surface-panel">
-        <div class="eyebrow">User Management</div>
-        <h2>Shared roster</h2>
-        <div class="roster-list">
-          ${
-            (workspaceState.publicState?.users || [])
-              .map((user) => renderUserCard(user))
-              .join("") || `<div class="empty-state">No users visible yet.</div>`
-          }
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderUserCard(user) {
-  const isRootAdmin = user.pubkey === workspaceState.publicState?.rootAdminPubkey;
-  const canChangeAdmin = currentUserIsAdmin() && !isRootAdmin && user.pubkey !== workspaceState.viewer?.pubkey;
-  return `
-    <article class="roster-item">
-      <div class="workspace-list__row">
-        <div>
-          <strong>${escapeHtml(user.displayName)}</strong>
-          <span>${user.username ? `@${escapeHtml(user.username)}` : shortKey(user.pubkey)}</span>
-        </div>
-        <div class="tag-row">
-          ${user.isAdmin ? `<span class="tag">admin</span>` : ""}
-          ${user.moderation ? `<span class="tag">${escapeHtml(user.moderation.action)}</span>` : ""}
-        </div>
-      </div>
-      <span>${user.submissionCount} submissions • ${user.commentCount} comments</span>
-      <span class="mono">${user.pubkey}</span>
-      ${
-        currentUserIsAdmin()
-          ? `
-            <div class="button-row button-row--tight">
-              ${
-                canChangeAdmin
-                  ? `<button class="button-ghost" type="button" data-user-action="admin" data-target-pubkey="${user.pubkey}" ${user.isAdmin ? 'data-mode="revoke"' : 'data-mode="grant"'}>${user.isAdmin ? "Remove admin" : "Make admin"}</button>`
-                  : isRootAdmin
-                    ? `<span class="tag">root admin</span>`
-                    : ""
-              }
-              ${
-                user.isAdmin && user.pubkey !== workspaceState.viewer?.pubkey && workspaceState.siteKeyShare
-                  ? `<button class="button-ghost" type="button" data-user-action="share-site-key" data-target-pubkey="${user.pubkey}">Share site key</button>`
-                  : ""
-              }
-              <button class="button-ghost" type="button" data-user-action="mod" data-target-pubkey="${user.pubkey}" data-mode="temp-ban">Temp ban</button>
-              <button class="button-ghost" type="button" data-user-action="mod" data-target-pubkey="${user.pubkey}" data-mode="full-ban">Full ban</button>
-              <button class="button-ghost" type="button" data-user-action="mod" data-target-pubkey="${user.pubkey}" data-mode="clear">Clear</button>
-            </div>
-          `
-          : ""
-      }
-    </article>
-  `;
-}
-
-function renderLookupCandidate() {
-  const user = workspaceState.userLookupResult;
-  if (!user) return "";
-  return `
-    <article class="roster-item">
-      <div class="workspace-list__row">
-        <div>
-          <strong>${escapeHtml(user.displayName || user.username || shortKey(user.pubkey))}</strong>
-          <span>${user.username ? `@${escapeHtml(user.username)}` : shortKey(user.pubkey)}</span>
-        </div>
-        <div class="tag-row">
-          ${user.isAdmin ? `<span class="tag">admin</span>` : `<span class="tag">member</span>`}
-        </div>
-      </div>
-      <span class="mono">${escapeHtml(user.pubkey)}</span>
-    </article>
-  `;
+function workspaceActionSurfaceDeps() {
+  return {
+    currentUserIsAdmin,
+    shortKey,
+    escapeHtml,
+    escapeAttribute,
+    resolveEntityDisplayValue,
+    trimmed,
+    renderLoadingState
+  };
 }
 
 function renderLogEvent(event) {
@@ -675,52 +487,6 @@ function renderLogEvent(event) {
         <a class="text-link" href="${target.href}">Open</a>
       </div>
     </article>
-  `;
-}
-
-function renderSubmissionsPane() {
-  if (currentUserHasInboxAccess()) {
-    return `
-      <section class="surface-panel">
-        <div class="eyebrow">Encrypted submissions</div>
-        <h2>Shared inbox</h2>
-        <div class="roster-list">
-          ${
-            workspaceState.inboxSubmissions.length
-              ? workspaceState.inboxSubmissions.map((item) => renderSubmissionCard(item)).join("")
-              : `<div class="empty-state">No submissions decrypted from the inbox yet.</div>`
-          }
-        </div>
-      </section>
-    `;
-  }
-
-  return `
-    <section class="surface-panel">
-      <div class="eyebrow">Submission intake</div>
-      <h2>Metadata view</h2>
-      <p class="muted-text">${
-        currentUserPendingKeyRequest() || workspaceState.keyRequestState === "pending"
-          ? "Waiting for the current shared inbox key. Public status updates still work while that access catches up."
-          : "This account can manage public status updates while shared inbox access is still catching up."
-      }</p>
-      <div class="roster-list">
-        ${
-          (workspaceState.publicState?.users || [])
-            .filter((user) => user.submissionCount > 0)
-            .map(
-              (user) => `
-                <article class="roster-item">
-                  <strong>${escapeHtml(user.displayName)}</strong>
-                  <span>${user.submissionCount} submission threads</span>
-                  <span class="mono">${user.pubkey}</span>
-                </article>
-              `
-            )
-            .join("") || `<div class="empty-state">No submission metadata visible yet.</div>`
-        }
-      </div>
-    </section>
   `;
 }
 
@@ -754,131 +520,6 @@ function renderLogPane() {
         }
       </div>
     </section>
-  `;
-}
-
-function renderSubmissionCard(item) {
-  const latest = item.latest?.payload || {};
-  const status = workspaceState.publicState?.submissionStatuses.get(item.id)?.status || "received";
-  const entityRefs = Array.isArray(latest.entity_refs) ? latest.entity_refs : [];
-  return `
-    <article class="roster-item">
-      <div class="workspace-list__row">
-        <div>
-          <strong>${escapeHtml(latest.subject || "Untitled submission")}</strong>
-          <span>${escapeHtml(latest.location || "No location supplied")}</span>
-        </div>
-        <div class="tag-row">
-          <span class="tag">${escapeHtml(status)}</span>
-        </div>
-      </div>
-      <span>${escapeHtml(trimmed(latest.details || "", 180))}</span>
-      ${
-        entityRefs.length
-          ? `<span class="muted-text">Entities: ${escapeHtml(entityRefs.map(resolveEntityDisplayValue).join(", "))}</span>`
-          : ""
-      }
-      ${
-        latest.suggested_entity?.name
-          ? `<span class="muted-text">Suggested entity: ${escapeHtml(latest.suggested_entity.name)}${latest.suggested_entity.location ? ` • ${escapeHtml(latest.suggested_entity.location)}` : ""}</span>`
-          : ""
-      }
-      <span class="mono">${item.author}</span>
-      <div class="button-row button-row--tight">
-        <button class="button-ghost" type="button" data-submission-action="status" data-submission-id="${item.id}" data-author-pubkey="${item.author}" data-status="approved">Approve</button>
-        <button class="button-ghost" type="button" data-submission-action="status" data-submission-id="${item.id}" data-author-pubkey="${item.author}" data-status="rejected">Reject</button>
-        ${latest.attachment?.url ? `<button class="button-ghost" type="button" data-download-attachment="${item.id}">Attachment</button>` : ""}
-        <button class="button-ghost" type="button" data-open-chat="${item.id}" data-chat-target="${item.author}">Chat</button>
-      </div>
-    </article>
-  `;
-}
-
-function renderEntitiesPane() {
-  return `
-    <section class="surface-panel">
-      <div class="workspace-list__row">
-        <div>
-          <div class="eyebrow">Entities</div>
-          <h2>Locations and targets</h2>
-        </div>
-        <button class="button" type="button" data-open-entity-modal>Add entity</button>
-      </div>
-      <div class="roster-list">
-        ${
-          (workspaceState.publicState?.entities || [])
-            .map(
-              (entity) => `
-                <article class="roster-item">
-                  <div class="workspace-list__row">
-                    <div>
-                      <strong>${escapeHtml(entity.name)}</strong>
-                      <span>${escapeHtml(entity.location)} • ${escapeHtml(entity.type)}</span>
-                    </div>
-                    <div class="tag-row">
-                      <span class="tag">${escapeHtml(entity.status)}</span>
-                    </div>
-                  </div>
-                  <span>${escapeHtml(entity.notes || "No public note yet.")}</span>
-                  ${
-                    currentUserIsAdmin()
-                      ? `
-                        <div class="button-row button-row--tight">
-                          <button class="button-ghost" type="button" data-entity-action="approve" data-entity-slug="${entity.slug}">Approve</button>
-                          <button class="button-ghost" type="button" data-entity-action="deny" data-entity-slug="${entity.slug}">Deny</button>
-                        </div>
-                      `
-                      : ""
-                  }
-                </article>
-              `
-            )
-            .join("") || `<div class="empty-state">No entities published yet.</div>`
-        }
-      </div>
-    </section>
-  `;
-}
-
-function renderReviewPane() {
-  const drafts = (workspaceState.publicState?.drafts || []).slice();
-  const pending = drafts.filter((draft) => ["candidate", "submitted", "review"].includes(String(draft.status || "").toLowerCase()));
-  const recentlyDecided = drafts
-    .filter((draft) => ["approved", "revision", "denied"].includes(String(draft.status || "").toLowerCase()))
-    .slice(0, 10);
-  return `
-    <div class="review-stack">
-      <section class="surface-panel">
-        <div class="workspace-list__row">
-          <div>
-            <div class="eyebrow">Post Review</div>
-            <h2>Ready for review</h2>
-          </div>
-          <div class="tag-row">
-            <span class="tag">${pending.length} waiting</span>
-          </div>
-        </div>
-        <p class="muted-text">Writers use the editor to save working drafts and send finished versions here for review. Approving keeps the post in the next bakedown queue.</p>
-        <div class="roster-list">
-          ${
-            pending.length
-              ? pending.map((draft) => renderReviewCard(draft)).join("")
-              : `<div class="empty-state">No posts are waiting for review.</div>`
-          }
-        </div>
-      </section>
-      <section class="surface-panel">
-        <div class="eyebrow">Recent decisions</div>
-        <h2>Reviewed posts</h2>
-        <div class="roster-list">
-          ${
-            recentlyDecided.length
-              ? recentlyDecided.map((draft) => renderReviewedCard(draft)).join("")
-              : `<div class="empty-state">Approved, denied, and revision requests will appear here.</div>`
-          }
-        </div>
-      </section>
-    </div>
   `;
 }
 
@@ -958,195 +599,6 @@ function reviewedDraftAction(draft) {
   return String(draft?.status || "").trim().toLowerCase() === "revision"
     ? "Open draft"
     : "Open preview";
-}
-
-function renderCommentsPane() {
-  const ownComments = workspaceState.publicState?.commentsByAuthor.get(workspaceState.viewer?.pubkey || "") || [];
-  if (currentUserIsAdmin()) {
-    const allComments = (workspaceState.publicState?.allComments || []).slice().reverse();
-    const hiddenCount = workspaceState.publicState?.hiddenComments?.length || 0;
-    return `
-      <section class="surface-panel">
-        <div class="workspace-list__row">
-          <div>
-            <div class="eyebrow">Comments</div>
-            <h2>Review comments</h2>
-          </div>
-          <div class="tag-row">
-            <span class="tag">${allComments.length - hiddenCount} shown</span>
-            <span class="tag">${hiddenCount} hidden</span>
-          </div>
-        </div>
-        <div class="roster-list">
-          ${
-            allComments.length
-              ? allComments.map((comment) => renderModerationComment(comment)).join("")
-              : `<div class="empty-state">No comments yet.</div>`
-          }
-        </div>
-      </section>
-    `;
-  }
-  return `
-    <section class="surface-panel">
-      <div class="eyebrow">Comments</div>
-      <h2>Your comments</h2>
-      <div class="roster-list">
-        ${
-          ownComments.length
-            ? ownComments
-                .slice()
-                .reverse()
-                .map(
-                  (comment) => `
-                    <article class="roster-item">
-                      <strong>${escapeHtml(comment.post_slug)}</strong>
-                      <span>${escapeHtml(trimmed(comment.markdown, 220))}</span>
-                    </article>
-                  `
-                )
-                .join("")
-            : `<div class="empty-state">No comments yet.</div>`
-        }
-      </div>
-    </section>
-  `;
-}
-
-function renderModerationComment(comment) {
-  const author = (workspaceState.publicState?.users || []).find((user) => user.pubkey === comment.author);
-  const authorLabel = author?.displayName || author?.username || shortKey(comment.author);
-  const moderation = comment.moderation || null;
-  const action = comment.visibility === "hidden" ? "restore" : "hide";
-  const actionLabel = action === "restore" ? "Restore" : "Hide";
-  return `
-    <article class="roster-item">
-      <div class="workspace-list__row">
-        <div>
-          <strong>${escapeHtml(authorLabel)}</strong>
-          <span>${escapeHtml(comment.post_slug)} • ${escapeHtml(new Date(comment.created_at * 1000).toLocaleString())}</span>
-        </div>
-        <div class="tag-row">
-          <span class="tag">${escapeHtml(comment.visibility)}</span>
-        </div>
-      </div>
-      <span>${escapeHtml(trimmed(comment.markdown, 260))}</span>
-      ${
-        moderation?.note
-          ? `<span class="muted-text">Moderation note: ${escapeHtml(moderation.note)}</span>`
-          : ""
-      }
-      <label class="comment-note-field">
-        <span>Moderation note</span>
-        <textarea data-comment-note="${escapeAttribute(comment.id)}" placeholder="Optional note for hide or restore">${escapeHtml(moderation?.note || "")}</textarea>
-      </label>
-      <div class="button-row button-row--tight">
-        <a class="text-link" href="./post.html?slug=${encodeURIComponent(comment.post_slug)}">Open post</a>
-        <button class="button-ghost" type="button" data-comment-action="${action}" data-comment-id="${escapeAttribute(comment.id)}">${actionLabel}</button>
-      </div>
-    </article>
-  `;
-}
-
-function renderEntityModal() {
-  if (!workspaceState.entityModal) return "";
-  const draft = workspaceState.entityModal || {};
-  return `
-    <div class="modal-backdrop">
-      <section class="modal-card">
-        <div class="workspace-list__row">
-          <div>
-            <div class="eyebrow">Entity</div>
-            <h2>Add entity</h2>
-          </div>
-          <button class="button-ghost" type="button" data-modal-close>Close</button>
-        </div>
-        <form class="tip-form" data-entity-form>
-          <label>
-            <span>Name</span>
-            <input name="name" type="text" maxlength="140" value="${escapeAttribute(draft.seedName || "")}" required>
-          </label>
-          <div class="tip-form__split">
-            <label>
-              <span>Location</span>
-              <input name="location" type="text" maxlength="160" placeholder="City, state" value="${escapeAttribute(draft.seedLocation || "")}" data-location-input required>
-            </label>
-            <label>
-              <span>Type</span>
-              <input name="type" type="text" maxlength="80" placeholder="factory farm, store, headquarters" value="${escapeAttribute(draft.seedType || "")}">
-            </label>
-          </div>
-          <div class="picker-results" data-location-results></div>
-          <div class="tip-form__split">
-            <label>
-              <span>Latitude</span>
-              <input name="lat" type="number" step="0.0001" value="${escapeAttribute(draft.seedLat ?? "")}">
-            </label>
-            <label>
-              <span>Longitude</span>
-              <input name="lng" type="number" step="0.0001" value="${escapeAttribute(draft.seedLng ?? "")}">
-            </label>
-          </div>
-          <label>
-            <span>Notes</span>
-            <textarea name="notes" placeholder="Short note for the map and index">${escapeHtml(draft.seedNotes || "")}</textarea>
-          </label>
-          <div class="button-row">
-            <button class="button" type="submit">Publish entity</button>
-          </div>
-        </form>
-      </section>
-    </div>
-  `;
-}
-
-function renderChatModal() {
-  if (!workspaceState.chatModal) return "";
-  const submission = workspaceState.inboxSubmissions.find((item) => item.id === workspaceState.chatModal.submissionId);
-  const messages = workspaceState.chatModal.messages || [];
-  const loading = workspaceState.chatModal.loading;
-  return `
-    <div class="modal-backdrop">
-      <section class="modal-card modal-card--wide">
-        <div class="workspace-list__row">
-          <div>
-            <div class="eyebrow">Submission chat</div>
-            <h2>${escapeHtml(submission?.latest?.payload?.subject || workspaceState.chatModal.submissionId)}</h2>
-          </div>
-          <button class="button-ghost" type="button" data-modal-close>Close</button>
-        </div>
-        <div class="chat-thread">
-          ${
-            loading
-              ? renderLoadingState("Looking up chat...")
-              : messages.length
-              ? messages
-                  .map(
-                    (message) => `
-                      <article class="chat-message ${message.author === workspaceState.viewer?.pubkey ? "is-self" : ""}">
-                        <strong>${message.author === workspaceState.viewer?.pubkey ? "You" : shortKey(message.author)}</strong>
-                        <p>${escapeHtml(message.payload.body || "")}</p>
-                      </article>
-                    `
-                  )
-                  .join("")
-              : `<div class="empty-state">No messages yet.</div>`
-          }
-        </div>
-        <form class="tip-form" data-chat-form>
-          <input name="submissionId" type="hidden" value="${escapeAttribute(workspaceState.chatModal.submissionId)}">
-          <input name="targetPubkey" type="hidden" value="${escapeAttribute(workspaceState.chatModal.targetPubkey)}">
-          <label>
-            <span>Reply</span>
-            <textarea name="body" placeholder="Write a reply" required></textarea>
-          </label>
-          <div class="button-row">
-            <button class="button" type="submit">Send message</button>
-          </div>
-        </form>
-      </section>
-    </div>
-  `;
 }
 
 async function handleLogin(form) {
@@ -1655,22 +1107,10 @@ function renderEntityPickerResults(fieldName) {
   if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
   const query = fieldName === "entityRefs" ? lastCommaValue(input.value) : input.value.trim();
   const matches = matchEntities(query).slice(0, 6);
-  if (!query) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = matches.length
-    ? matches
-        .map(
-          (entity) => `
-            <button class="picker-chip" type="button" data-entity-pick="${escapeAttribute(entity.slug)}" data-target-field="${fieldName}">
-              <strong>${escapeHtml(entity.name)}</strong>
-              <span>${escapeHtml(entity.location)}</span>
-            </button>
-          `
-        )
-        .join("")
-    : `<div class="picker-hint">No match yet. Use the create button to add a new entity.</div>`;
+  host.innerHTML = renderEntityPickerResultsMarkup(fieldName, query, matches, {
+    escapeAttribute,
+    escapeHtml
+  });
 }
 
 function renderLocationResults() {
@@ -1681,21 +1121,10 @@ function renderLocationResults() {
   const matches = uniqueLocations()
     .filter((location) => !query || location.toLowerCase().includes(query))
     .slice(0, 6);
-  if (!query && !matches.length) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = matches.length
-    ? matches
-        .map(
-          (location) => `
-            <button class="picker-chip" type="button" data-location-pick="${escapeAttribute(location)}">
-              <strong>${escapeHtml(location)}</strong>
-            </button>
-          `
-        )
-        .join("")
-    : `<div class="picker-hint">No saved location matches. Keep the typed value to create a new one.</div>`;
+  host.innerHTML = renderLocationResultsMarkup(query, matches, {
+    escapeAttribute,
+    escapeHtml
+  });
 }
 
 function applyEntityPick(button) {

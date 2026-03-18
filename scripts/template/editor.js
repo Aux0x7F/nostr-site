@@ -4,11 +4,22 @@ import {
   cleanSlug,
   deriveIdentity,
   ensureEventToolsLoaded,
-  getCachedPublicState,
-  loadPublicState,
   publishTaggedJson
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
 import { getStoredSession } from "../core/session.js";
+import {
+  renderEditorLoadingMarkup,
+  renderEditorModalView,
+  renderEditorShellView
+} from "./surfaces/editor-shell.js";
+
+const editorPublicStateStore = createPublicStateStore({
+  getSessionSecretKey: async () => editorState.session?.secretKeyHex || "",
+  page: "editor",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
 
 const editorState = {
   session: getStoredSession(),
@@ -30,6 +41,11 @@ const editorState = {
   documentClicksBound: false
 };
 
+editorState.publicState = editorPublicStateStore.value;
+editorPublicStateStore.subscribe((snapshot) => {
+  editorState.publicState = snapshot.value;
+});
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.querySelector("[data-editor-page]")) return;
   void initEditorPage();
@@ -46,14 +62,14 @@ async function initEditorPage(force = false) {
   }
   await ensureEventToolsLoaded();
   editorState.viewer = deriveIdentity(editorState.session.secretKeyHex);
-  const cachedPublicState = !force ? getCachedPublicState() : null;
+  const cachedPublicState = !force ? editorPublicStateStore.value : null;
   if (cachedPublicState && editorUserIsAdmin(cachedPublicState, editorState.viewer?.pubkey)) {
     editorState.publicState = cachedPublicState;
     renderEditorShell();
   } else {
     renderEditorLoading("Looking up editor...");
   }
-  editorState.publicState = await loadPublicState(force);
+  editorState.publicState = (await editorPublicStateStore.hydrate({ force, reason: "editor-load" })).value;
   editorState.staticSlugs = await loadStaticSlugs().catch(() => []);
   renderEditorShell();
 }
@@ -62,7 +78,7 @@ function renderEditorLoading(message) {
   const shell = document.querySelector("[data-editor-shell]");
   const lede = document.querySelector("[data-editor-lede]");
   if (lede) lede.textContent = message;
-  if (shell) shell.innerHTML = renderLoadingState(message);
+  if (shell) shell.innerHTML = renderEditorLoadingMarkup(message, { renderLoadingState });
 }
 
 function renderEditorShell() {
@@ -70,98 +86,20 @@ function renderEditorShell() {
   const title = document.querySelector("[data-editor-title]");
   const lede = document.querySelector("[data-editor-lede]");
   if (!shell || !title || !lede) return;
-
-  if (!editorState.session) {
-    title.textContent = "Log in";
-    lede.textContent = "Log in with an admin account to write and review post drafts.";
-    shell.innerHTML = `
-      <section class="surface-panel editor-gate">
-        <div class="eyebrow">Authoring</div>
-        <h2>Admin access required</h2>
-        <p>Post drafting is available to approved admins only.</p>
-        <a class="button" href="./admin.html?tab=login">Log in</a>
-      </section>
-    `;
-    return;
-  }
-
-  if (!currentUserIsAdmin()) {
-    title.textContent = "Authoring";
-    lede.textContent = "This page opens for admin accounts only.";
-    shell.innerHTML = `
-      <section class="surface-panel editor-gate">
-        <div class="eyebrow">Authoring</div>
-        <h2>Admin access required</h2>
-        <p>This account can manage its profile and comments, but it does not have post authoring access.</p>
-        <a class="button" href="./blog.html">Back to the blog</a>
-      </section>
-    `;
-    return;
-  }
-
   hydrateDraftState();
-  title.textContent = editorState.currentSlug ? "Edit post" : "Create post";
-  lede.textContent = "Write in the full editor, let working drafts save automatically, and send finished versions into review.";
-  shell.innerHTML = `
-    <section class="surface-panel editor-studio">
-      <form class="editor-form editor-form--studio" data-editor-form>
-        <div class="editor-actions">
-          <div class="editor-actions__copy">
-            <div class="eyebrow">Post draft</div>
-            <h2>${editorState.currentSlug ? "Continue editing" : "Start a new post"}</h2>
-            <p>${editorState.currentSlug ? "Keep shaping the draft, then send the next version into review when it is ready." : "Write the title, summary, and full body here. Drafts save as you work and can be sent into review when they are ready."}</p>
-          </div>
-          <div class="editor-actions__controls">
-            <div class="editor-save-state" data-editor-status aria-live="polite">Autosave is on. Save draft now pushes the latest version immediately.</div>
-            <div class="button-row">
-              <button class="button-ghost" type="button" data-editor-save>Save draft now</button>
-              <button class="button" type="button" data-editor-submit>Send to review</button>
-            </div>
-          </div>
-        </div>
+  const view = renderEditorShellView({
+    editorState,
+    deps: {
+      currentUserIsAdmin,
+      escapeAttribute,
+      escapeHtml
+    }
+  });
+  title.textContent = view.title;
+  lede.textContent = view.lede;
+  shell.innerHTML = view.shellMarkup;
 
-        <label class="editor-field editor-field--title">
-          <span class="sr-only">Title</span>
-          <input class="editor-title-input" name="title" type="text" maxlength="140" placeholder="Post title" value="${escapeAttribute(editorState.document.title)}" required>
-        </label>
-
-        <label class="editor-field editor-field--summary">
-          <span class="sr-only">Summary</span>
-          <textarea class="editor-summary-input" name="summary" rows="3" placeholder="Short summary for the archive card">${escapeHtml(editorState.document.summary)}</textarea>
-        </label>
-
-        <div class="editor-meta-grid">
-          <label class="editor-field editor-field--compact">
-            <span class="sr-only">Date</span>
-            <input name="date" type="date" aria-label="Publication date" value="${escapeAttribute(editorState.document.date)}">
-          </label>
-          <label class="editor-field editor-field--compact">
-            <span class="sr-only">Tags</span>
-            <input name="tags" type="text" placeholder="Tags: updates, records, campaign" value="${escapeAttribute(editorState.document.tags.join(", "))}">
-          </label>
-          <label class="editor-field editor-field--compact">
-            <span class="sr-only">Lead entity</span>
-            <div class="editor-picker" data-editor-picker="primaryEntity">
-              <input name="primaryEntity" type="text" data-editor-entity-input="primaryEntity" autocomplete="off" placeholder="Lead entity" value="${escapeAttribute(editorState.document.primaryEntity)}">
-              <div class="picker-results picker-results--dropdown" data-editor-entity-results="primaryEntity"></div>
-            </div>
-          </label>
-          <label class="editor-field editor-field--compact editor-field--wide">
-            <span class="sr-only">Related entities</span>
-            <div class="editor-picker" data-editor-picker="entityRefs">
-              <input name="entityRefs" type="text" data-editor-entity-input="entityRefs" autocomplete="off" placeholder="Related entities" value="${escapeAttribute(editorState.document.entityRefs.join(", "))}">
-              <div class="picker-results picker-results--dropdown" data-editor-entity-results="entityRefs"></div>
-            </div>
-          </label>
-        </div>
-
-        <div class="editor-markdown-field" role="group" aria-label="Body">
-          <span class="sr-only">Body</span>
-          <div class="editor-surface" data-editor-surface></div>
-        </div>
-      </form>
-    </section>
-  `;
+  if (!editorState.session || !currentUserIsAdmin()) return;
 
   bindEditorShell();
   renderEntityModal();
@@ -618,58 +556,14 @@ function createEntityModalState(fieldName) {
 
 function renderEntityModal() {
   const root = ensureModalRoot();
-  if (!editorState.entityModal) {
-    root.innerHTML = "";
-    return;
-  }
-  const { seedName, seedLocation, seedType, seedNotes } = editorState.entityModal;
-  root.innerHTML = `
-    <div class="modal-backdrop" data-editor-modal-backdrop>
-      <section class="modal-card modal-card--editor" aria-label="Add entity">
-        <div class="section-heading">
-          <div>
-            <div class="eyebrow">Add entity</div>
-            <h3>Create an entity without leaving the draft</h3>
-            <p>Save it once, then keep writing.</p>
-          </div>
-          <button class="button-ghost" type="button" data-editor-modal-close>Close</button>
-        </div>
-        <form class="form-grid editor-entity-form" data-editor-entity-form>
-          <label>
-            <span class="sr-only">Entity name</span>
-            <input name="name" type="text" maxlength="120" placeholder="Entity name" value="${escapeAttribute(seedName)}" required>
-          </label>
-          <label>
-            <span class="sr-only">Entity type</span>
-            <input name="type" type="text" maxlength="80" placeholder="Type: organization, location, campaign" value="${escapeAttribute(seedType)}">
-          </label>
-          <label class="editor-field editor-field--wide">
-            <span class="sr-only">Location</span>
-            <div class="editor-picker editor-picker--modal">
-              <input name="location" type="text" maxlength="160" data-editor-location-input autocomplete="off" placeholder="Location" value="${escapeAttribute(seedLocation)}">
-              <div class="picker-results picker-results--dropdown" data-editor-location-results></div>
-            </div>
-          </label>
-          <label class="editor-field editor-field--compact">
-            <span class="sr-only">Latitude</span>
-            <input name="lat" type="text" inputmode="decimal" placeholder="Latitude (optional)">
-          </label>
-          <label class="editor-field editor-field--compact">
-            <span class="sr-only">Longitude</span>
-            <input name="lng" type="text" inputmode="decimal" placeholder="Longitude (optional)">
-          </label>
-          <label class="editor-field editor-field--wide">
-            <span class="sr-only">Notes</span>
-            <textarea name="notes" rows="4" placeholder="Notes for editors or map context">${escapeHtml(seedNotes)}</textarea>
-          </label>
-          <div class="button-row">
-            <button class="button-ghost" type="button" data-editor-modal-close>Cancel</button>
-            <button class="button" type="submit">Save entity</button>
-          </div>
-        </form>
-      </section>
-    </div>
-  `;
+  root.innerHTML = renderEditorModalView({
+    editorState,
+    deps: {
+      escapeAttribute,
+      escapeHtml
+    }
+  });
+  if (!editorState.entityModal) return;
   bindEntityModal();
   renderLocationResults();
 }

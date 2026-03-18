@@ -12,15 +12,35 @@ import {
   ensureBlobAvailable,
   loadAdminKeyShare,
   loadInboxSubmissions,
-  loadPublicState,
   loadSubmissionThread,
   loadUserSubmissions,
-  publicStateNeedsRepair,
   publishTaggedJson,
-  requestPublicStateRepair,
-  startPublicStateRepairPeer
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
+import {
+  clampNotificationsPanel,
+  closeProfileMenu,
+  createNavigationUiState,
+  keepProfileMenuOpen,
+  toggleNotificationsPanel,
+  toggleProfileMenu
+} from "../core/navigation-state.js";
+import {
+  countNotificationItems,
+  createNotificationState
+} from "../core/notification-state.js";
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
+import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
+import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
+import {
+  bindMapEntityCards as bindMapSurfaceEntityCards,
+  destroyLeafletMap as destroySurfaceLeafletMap,
+  renderLeafletMapSurface,
+  renderMapPageSurface,
+  requestedMapEntity,
+  scheduleMapEntityFocus as scheduleSurfaceMapEntityFocus
+} from "./surfaces/map.js";
+import { renderNavigationMarkup, profileInitials } from "./surfaces/navigation.js";
 
 const NAV_KEYS = {
   home: ["home"],
@@ -39,22 +59,42 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   year: "numeric"
 });
+const navigationUi = createNavigationUiState();
+
+const publicStateStore = createPublicStateStore({
+  getSessionSecretKey: getRequestSignerSecretKey,
+  page: () => document.body.dataset.page || "site",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
 
 const state = {
   session: getStoredSession(),
   guestSession: getStoredGuestSession(),
   viewer: null,
-  publicState: null,
-  publicStateRepairPeerStarted: false,
-  publicStateRepairInFlight: false,
-  publicStateRepairRequestedAt: 0,
+  publicState: publicStateStore.value,
   postsPromise: null,
   commentReply: null,
-  notifications: [],
-  notificationsLoading: false,
+  navigationUi,
   map: null,
-  markers: null
+  markers: null,
+  mapCanvas: null,
+  markerIndex: null,
+  pendingMapEntitySlug: ""
 };
+
+const notificationState = createNotificationState({
+  storageNamespace: SITE.nostr.storageNamespace,
+  onChange: () => renderNavigation(),
+  getSession: () => state.session,
+  getViewerPubkey: () => state.viewer?.pubkey || "",
+  getPublicState: (force) => getPublicState(force),
+  buildNotifications: ({ publicState, force }) => buildNotifications(publicState, force)
+});
+
+publicStateStore.subscribe((snapshot) => {
+  state.publicState = snapshot.value;
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   initExternalLinks();
@@ -77,6 +117,8 @@ function initNavigation() {
     if (toggle) {
       toggle.classList.toggle("is-open", open);
       toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+      toggle.setAttribute("title", open ? "Close navigation" : "Open navigation");
     }
   };
 
@@ -119,12 +161,37 @@ function initNavigation() {
 
     const profileToggle = target.closest("[data-profile-toggle]");
     if (profileToggle) {
-      const menu = profileToggle.closest("[data-profile-menu]");
-      if (menu) {
-        const isOpen = !menu.classList.contains("is-open");
-        menu.classList.toggle("is-open", isOpen);
-        if (isOpen) markNotificationsSeen();
-      }
+      toggleProfileMenu(state.navigationUi);
+      renderNavigation();
+      return;
+    }
+
+    if (target.closest("[data-notification-toggle]")) {
+      event.preventDefault();
+      toggleNotificationsPanel(state.navigationUi, {
+        count: countNotificationItems(notificationState.items),
+        loading: notificationState.loading
+      });
+      renderNavigation();
+      return;
+    }
+
+    if (target.closest("[data-clear-notifications]")) {
+      event.preventDefault();
+      notificationState.clear();
+      keepProfileMenuOpen(state.navigationUi);
+      clampNotificationsPanel(state.navigationUi, { count: 0, loading: false });
+      renderNavigation();
+      return;
+    }
+
+    const notificationLink = target.closest("[data-notification-link]");
+    if (notificationLink) {
+      notificationState.dismiss(notificationLink.getAttribute("data-notification-link") || "");
+      clampNotificationsPanel(state.navigationUi, {
+        count: countNotificationItems(notificationState.items),
+        loading: notificationState.loading
+      });
       return;
     }
 
@@ -140,7 +207,10 @@ function initNavigation() {
     }
 
     for (const menu of document.querySelectorAll("[data-profile-menu].is-open")) {
-      if (!menu.contains(target)) menu.classList.remove("is-open");
+      if (!menu.contains(target)) {
+        closeProfileMenu(state.navigationUi);
+        renderNavigation();
+      }
     }
     for (const group of document.querySelectorAll("[data-nav-group].is-open")) {
       if (!group.contains(target)) group.classList.remove("is-open");
@@ -164,28 +234,16 @@ async function bootstrapRelayState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
-    await ensurePublicStateRepairPeer();
-    state.publicState = await loadPublicState();
+    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "bootstrap" })).value;
     if (state.session) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
     }
   } catch {
-    state.publicState = null;
+    state.publicState = state.publicState || publicStateStore.value;
   }
   void publishVisitPulse();
-  void maybeRequestPublicStateRepair(state.publicState, "bootstrap");
   void hydrateNotifications();
   renderNavigation();
-}
-
-async function ensurePublicStateRepairPeer() {
-  if (state.publicStateRepairPeerStarted) return;
-  try {
-    await startPublicStateRepairPeer();
-    state.publicStateRepairPeerStarted = true;
-  } catch {
-    return;
-  }
 }
 
 function renderNavigation() {
@@ -202,103 +260,34 @@ function renderNavigation() {
       state.viewer &&
       state.publicState?.admins?.includes(state.viewer.pubkey)
   );
-  const notifications = isLoggedIn ? state.notifications.slice(0, 8) : [];
-  const unreadCount = isLoggedIn ? countUnreadNotifications(notifications) : 0;
+  const notifications = isLoggedIn ? notificationState.items.slice(0, 8) : [];
+  const notificationsExpanded = clampNotificationsPanel(state.navigationUi, {
+    count: countNotificationItems(notifications),
+    loading: notificationState.loading
+  });
   const mapEnabled = Boolean(state.publicState?.connected || state.publicState?.approvedEntities?.length);
-  const mapCurrent = NAV_KEYS.map.includes(page);
-  const profileMarkup = isLoggedIn
-    ? `
-      <div class="profile-menu ${NAV_KEYS.workspace.includes(page) ? "is-current" : ""}" data-profile-menu>
-        <button class="profile-menu__toggle ${currentUser?.avatarUrl ? "has-avatar" : ""}" type="button" data-profile-toggle aria-label="Profile options">
-          <span class="profile-menu__badge ${currentUser?.avatarUrl ? "has-avatar" : ""}">${profileBadgeMarkup(currentUser)}</span>
-          ${unreadCount ? `<span class="profile-menu__notice">${Math.min(unreadCount, 9)}${unreadCount > 9 ? "+" : ""}</span>` : ""}
-        </button>
-        <div class="profile-menu__panel">
-          ${
-            state.notificationsLoading
-              ? `<div class="profile-menu__section"><div class="loading-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Looking up notifications...</span></div></div>`
-              : notifications.length
-                ? `
-                  <div class="profile-menu__section">
-                    <div class="profile-menu__section-title">Notifications</div>
-                    <div class="profile-menu__notifications">
-                      ${notifications.map((item) => renderNotificationItem(item)).join("")}
-                    </div>
-                  </div>
-                `
-                : ""
-          }
-          <a href="./admin.html?tab=profile">Profile</a>
-          ${isAdmin ? `<a href="./admin.html?tab=dashboard">Admin</a>` : ""}
-          <button type="button" data-signout>Sign out</button>
-        </div>
-      </div>
-    `
-    : `<a class="profile-cta" href="./admin.html?tab=login" aria-label="Create or log in">Create/Login</a>`;
-
-  nav.innerHTML = `
-    <a class="${navLinkClass(page, "home")}" href="./index.html">Home</a>
-    ${
-      isAdmin
-        ? `
-          <div class="nav-group ${NAV_KEYS.blog.includes(page) ? "is-current" : ""}" data-nav-group>
-            <button class="nav-group__toggle" type="button" data-submenu-toggle>
-              Blog
-            </button>
-            <div class="nav-group__panel">
-              <a class="${navLinkClass(page, "blog")}" href="./blog.html">View Blog</a>
-              <a href="./editor.html">Create Post</a>
-            </div>
-          </div>
-        `
-        : `<a class="${navLinkClass(page, "blog")}" href="./blog.html">Blog</a>`
+  nav.innerHTML = renderNavigationMarkup({
+    page,
+    navKeys: NAV_KEYS,
+    isLoggedIn,
+    isAdmin,
+    currentUser,
+    sessionUsername: state.session?.username || "",
+    notifications,
+    notificationsLoading: notificationState.loading,
+    profileMenuOpen: state.navigationUi.profileMenuOpen,
+    notificationsExpanded,
+    mapEnabled,
+    deps: {
+      countUnreadNotifications: countNotificationItems,
+      escapeAttribute,
+      escapeHtml
     }
-    <a class="${navLinkClass(page, "map", !mapEnabled && !mapCurrent)}" href="./map.html" ${!mapEnabled && !mapCurrent ? 'aria-disabled="true"' : ""}>Map</a>
-    <div class="nav-group ${NAV_KEYS["get-involved"].includes(page) ? "is-current" : ""}" data-nav-group>
-      <button class="nav-group__toggle" type="button" data-submenu-toggle>
-        Get Involved
-      </button>
-      <div class="nav-group__panel">
-        <a class="${navLinkClass(page, "get-involved")}" href="./get-involved.html">Get Involved</a>
-        <a class="${navLinkClass(page, "guide")}" href="./guide.html">Guide</a>
-        <a class="${navLinkClass(page, "submit")}" href="./submit.html">Submit</a>
-      </div>
-    </div>
-    <a class="${navLinkClass(page, "about")}" href="./about.html">About</a>
-    <a class="${navLinkClass(page, "merch")}" href="./merch.html">Merch</a>
-    ${profileMarkup}
-  `;
+  });
 
   for (const disabled of nav.querySelectorAll('[aria-disabled="true"]')) {
     disabled.addEventListener("click", (event) => event.preventDefault(), { once: false });
   }
-}
-
-function profileBadgeMarkup(user) {
-  if (user?.avatarUrl) {
-    const label = user.displayName || user.username || "Profile";
-    const blob = user.avatarBlob;
-    const blobAttrs = blob?.sha256
-      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || user.avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
-      : "";
-    return `<img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}>`;
-  }
-  if (!state.session?.username) return "Create/Login";
-  return escapeHtml(profileInitials(user?.displayName || state.session.username));
-}
-
-function profileInitials(value) {
-  const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "Me";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
-}
-
-function navLinkClass(page, key, disabled = false) {
-  const parts = ["nav-link"];
-  if (NAV_KEYS[key]?.includes(page)) parts.push("is-current");
-  if (disabled) parts.push("is-disabled");
-  return parts.join(" ");
 }
 
 function initExternalLinks() {
@@ -325,12 +314,17 @@ async function initBlogCards() {
       homeGrid.innerHTML = posts
         .filter((post) => post.featured)
         .slice(0, count)
-        .map((post) => renderPostCard(post, true))
+        .map((post) => renderPostCard(post, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
         .join("");
     }
     if (listGrid) {
       const entries = canEdit
-        ? buildBlogArchiveEntries(posts, publicState.drafts || [])
+        ? buildBlogArchiveEntries(posts, publicState.drafts || [], {
+            draftReviewAction,
+            draftStatusLabel,
+            normalizeDraftStatus,
+            sortDateValue
+          })
         : posts.map((post) => ({
             ...post,
             archiveStatus: "posted",
@@ -340,7 +334,7 @@ async function initBlogCards() {
           }));
       listGrid.innerHTML = `
         ${canEdit ? renderAuthoringLeadCard() : ""}
-        ${entries.map((post) => renderPostCard(post, false)).join("")}
+        ${entries.map((post) => renderPostCard(post, false, { escapeAttribute, escapeHtml, formatDate, renderTagList })).join("")}
       `;
     }
   } catch {
@@ -403,7 +397,7 @@ async function initPostDetail() {
         : posts
             .filter((item) => item.slug !== post.slug)
             .slice(0, 2)
-            .map((item) => renderPostCard(item, true))
+            .map((item) => renderPostCard(item, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
             .join("");
     }
 
@@ -464,32 +458,29 @@ async function initMapPage() {
   const publicState = await getPublicState();
   if (!publicState.approvedEntities.length) {
     list.innerHTML = `<div class="empty-state">Published entities will appear here once approved entries are available.</div>`;
+    destroyLeafletMap();
     canvas.innerHTML = `<div class="map-empty">Map data unavailable.</div>`;
     return;
   }
 
   const posts = await loadPosts().catch(() => []);
   const entityUsage = buildEntityUsage(posts, publicState.approvedEntities);
-  list.innerHTML = publicState.approvedEntities
-    .map((entity) => renderEntityCard(entity, entityUsage.get(entity.slug) || []))
-    .join("");
-  renderLeafletMap(canvas, publicState.approvedEntities);
-  focusRequestedEntity();
+  renderMapPageSurface(list, canvas, publicState.approvedEntities, entityUsage, mapSurfaceDeps());
 }
 
 async function renderComments(postSlug, publicState) {
   const panel = document.querySelector("[data-comment-panel]");
   if (!panel) return;
 
-  const comments = publicState.commentsByPost.get(postSlug) || [];
-  const threadedComments = buildCommentTree(comments);
+  const threadedComments = (publicState.commentThreadsByPost?.get(postSlug) || []).slice();
+  const renderedCount = countRenderedCommentNodes(threadedComments);
   const isLoggedIn = Boolean(state.session);
   const isAdmin = Boolean(state.viewer && publicState.admins.includes(state.viewer.pubkey));
   const currentUser = isLoggedIn && state.viewer
     ? publicState.users.find((user) => user.pubkey === state.viewer.pubkey) || null
     : null;
   const replyTarget = state.commentReply?.postSlug === postSlug
-    ? comments.find((comment) => comment.id === state.commentReply.commentId) || null
+    ? publicState.commentIndex?.get(state.commentReply.commentId) || null
     : null;
   if (state.commentReply?.postSlug === postSlug && !replyTarget) {
     state.commentReply = null;
@@ -501,7 +492,7 @@ async function renderComments(postSlug, publicState) {
         <div class="eyebrow">Discussion</div>
         <h2>Comments</h2>
       </div>
-      <p>${renderCommentCountLabel(comments.length)}</p>
+      <p>${renderCommentCountLabel(renderedCount)}</p>
     </div>
     ${
       isLoggedIn
@@ -537,7 +528,17 @@ async function renderComments(postSlug, publicState) {
     }
     ${
       threadedComments.length
-        ? `<div class="comment-list">${threadedComments.map((comment) => renderComment(comment, publicState, { isAdmin, canReply: isLoggedIn })).join("")}</div>`
+        ? `<div class="comment-list">${threadedComments
+            .map((comment) =>
+              renderComment(comment, publicState, { isAdmin, canReply: isLoggedIn }, {
+                escapeAttribute,
+                escapeHtml,
+                formatDateTime,
+                renderAvatarBadge,
+                renderMiniMarkdown
+              })
+            )
+            .join("")}</div>`
         : isLoggedIn
           ? `<div class="comment-list"><div class="empty-state">No comments yet. Start the discussion.</div></div>`
           : ""
@@ -570,7 +571,6 @@ async function renderComments(postSlug, publicState) {
           kind: SITE.nostr.kinds.comment,
           secretKeyHex: state.session.secretKeyHex,
           tags: [
-            ["d", `comment-${Date.now()}`],
             ["a", postSlug],
             ...(parentId ? [["e", parentId], ["parent", parentId]] : []),
             ...(rootId ? [["root", rootId]] : [])
@@ -585,7 +585,7 @@ async function renderComments(postSlug, publicState) {
         form.reset();
         state.commentReply = null;
         panel.innerHTML = renderLoadingState("Looking up discussion...");
-        state.publicState = await loadPublicState(true);
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-create" })).value;
         state.viewer = viewer;
         await renderComments(postSlug, state.publicState);
       } catch (error) {
@@ -632,7 +632,7 @@ async function renderComments(postSlug, publicState) {
             action: "hide"
           }
         });
-        state.publicState = await loadPublicState(true);
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-hide" })).value;
         await renderComments(postSlug, state.publicState);
       } catch {
         return;
@@ -641,95 +641,11 @@ async function renderComments(postSlug, publicState) {
   }
 }
 
-function renderComment(comment, publicState, options = {}, depth = 0) {
-  const author = publicState.users.find((user) => user.pubkey === comment.author);
-  const authorLabel = author?.displayName || author?.username || "User";
-  const replies = Array.isArray(comment.replies) ? comment.replies : [];
-  return `
-    <article class="comment-card ${depth ? "comment-card--reply" : ""}" id="comment-${escapeAttribute(comment.id)}" data-comment-id="${escapeAttribute(comment.id)}">
-      <div class="comment-card__shell">
-        ${renderAvatarBadge(author, authorLabel, "comment-card__avatar")}
-        <div class="comment-card__main">
-          <div class="comment-card__meta">
-            <div>
-              <strong>${escapeHtml(authorLabel)}</strong>
-              <span>${formatDateTime(comment.created_at)}</span>
-            </div>
-          </div>
-          <div class="comment-card__body">${renderMiniMarkdown(comment.markdown)}</div>
-          <div class="comment-card__actions">
-            ${options.canReply ? `<button type="button" class="button-ghost" data-reply-comment="${escapeAttribute(comment.id)}">Reply</button>` : ""}
-            ${options.isAdmin ? `<button type="button" class="button-ghost" data-hide-comment="${escapeAttribute(comment.id)}">Hide</button>` : ""}
-          </div>
-          ${
-            replies.length
-              ? `<div class="comment-card__children">${replies.map((reply) => renderComment(reply, publicState, options, depth + 1)).join("")}</div>`
-              : ""
-          }
-        </div>
-      </div>
-    </article>
-  `;
-}
-
-function buildCommentTree(comments) {
-  const nodes = new Map(
-    (Array.isArray(comments) ? comments : []).map((comment) => [
-      comment.id,
-      {
-        ...comment,
-        replies: []
-      }
-    ])
+function countRenderedCommentNodes(nodes) {
+  return (Array.isArray(nodes) ? nodes : []).reduce(
+    (total, node) => total + 1 + countRenderedCommentNodes(node?.replies || []),
+    0
   );
-  const roots = [];
-  for (const node of nodes.values()) {
-    const parentId = String(node.parent_id || "").trim();
-    if (!parentId) {
-      roots.push(node);
-      continue;
-    }
-    const parent = nodes.get(parentId);
-    if (isCommentThreadAnchor(parent, node)) {
-      if (!node.root_id) node.root_id = parent.root_id || parent.id;
-      parent.replies.push(node);
-      continue;
-    }
-    const rootId = String(node.root_id || "").trim();
-    const threadRoot = rootId ? nodes.get(rootId) : null;
-    if (isCommentThreadAnchor(threadRoot, node)) {
-      node.root_id = threadRoot.id;
-      threadRoot.replies.push(node);
-    }
-  }
-  sortCommentNodes(roots);
-  return roots;
-}
-
-function isCommentThreadAnchor(anchor, node) {
-  return Boolean(
-    anchor &&
-    node &&
-    anchor.id !== node.id &&
-    String(anchor.post_slug || "").trim() &&
-    String(anchor.post_slug || "").trim() === String(node.post_slug || "").trim()
-  );
-}
-
-function sortCommentNodes(nodes) {
-  nodes.sort((left, right) => {
-    const leftTime = Number(left?.created_at || 0);
-    const rightTime = Number(right?.created_at || 0);
-    if (leftTime !== rightTime) return leftTime - rightTime;
-    return String(left?.id || "").localeCompare(String(right?.id || ""));
-  });
-  for (const node of nodes) {
-    if (Array.isArray(node.replies) && node.replies.length) sortCommentNodes(node.replies);
-  }
-}
-
-function renderCommentCountLabel(count) {
-  return `${count} visible comment${count === 1 ? "" : "s"}`;
 }
 
 function commentAuthorLabel(comment, publicState) {
@@ -747,98 +663,6 @@ function renderAvatarBadge(user, fallbackLabel, className) {
     return `<span class="${className} ${className}--image"><img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}></span>`;
   }
   return `<span class="${className}">${escapeHtml(profileInitials(label))}</span>`;
-}
-
-function renderPostCard(post, compact) {
-  const href = post.href || `./post.html?slug=${encodeURIComponent(post.slug)}`;
-  const eyebrow = post.eyebrow || "Blog post";
-  const actionLabel = post.actionLabel || "Open post";
-  const statusPill = post.statusLabel
-    ? `<span class="status-pill status-pill--${escapeAttribute(post.archiveStatus || "posted")}">${escapeHtml(post.statusLabel)}</span>`
-    : "";
-  if (!compact) {
-    return `
-      <article class="post-card post-card--list ${post.cardClass || ""}">
-        <div class="post-card__body">
-          <div class="post-card__head">
-            <div class="eyebrow">${escapeHtml(eyebrow)}</div>
-            ${statusPill}
-          </div>
-          <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
-          <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
-          <p class="card-summary">${escapeHtml(post.summary)}</p>
-          <div class="tag-row">${renderTagList((post.tags || []).slice(0, 4))}</div>
-        </div>
-        <div class="post-card__rail">
-          <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
-        </div>
-      </article>
-    `;
-  }
-  return `
-    <article class="post-card ${compact ? "post-card--compact" : ""}">
-      <div class="post-card__head">
-        <div class="eyebrow">${escapeHtml(eyebrow)}</div>
-        ${statusPill}
-      </div>
-      <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
-      <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
-      <p>${escapeHtml(post.summary)}</p>
-      <div class="tag-row">${renderTagList((post.tags || []).slice(0, compact ? 2 : 4))}</div>
-      <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
-    </article>
-  `;
-}
-
-function buildBlogArchiveEntries(posts, drafts) {
-  const staticSlugs = new Set((Array.isArray(posts) ? posts : []).map((post) => post.slug));
-  const published = (Array.isArray(posts) ? posts : []).map((post) => ({
-    ...post,
-    archiveStatus: "posted",
-    statusLabel: "Posted",
-    href: `./post.html?slug=${encodeURIComponent(post.slug)}`,
-    actionLabel: "Open post"
-  }));
-  const relayEntries = (Array.isArray(drafts) ? drafts : [])
-    .filter((draft) => !(staticSlugs.has(draft.slug) && normalizeDraftStatus(draft.status) === "approved"))
-    .map((draft) => {
-      const status = normalizeDraftStatus(draft.status);
-      const reviewAction = draftReviewAction(draft);
-      const archived = status === "approved" ? "approved" : status;
-      const isEditable = status === "draft" || status === "revision";
-      const href = isEditable
-        ? `./editor.html?slug=${encodeURIComponent(draft.slug)}`
-        : `./post.html?draft=${encodeURIComponent(draft.slug)}`;
-      return {
-        ...draft,
-        body: draft.markdown || "",
-        archiveStatus: archived,
-        statusLabel: draftStatusLabel(status, reviewAction),
-        href,
-        actionLabel: isEditable ? "Continue writing" : "Open preview",
-        location: draft.location || "Draft location pending",
-        summary: draft.summary || "This post does not have a summary yet.",
-        eyebrow: "Blog post"
-      };
-    });
-  return [...relayEntries, ...published]
-    .sort((left, right) => {
-      const leftStamp = sortDateValue(left);
-      const rightStamp = sortDateValue(right);
-      if (leftStamp !== rightStamp) return rightStamp - leftStamp;
-      return String(left.title || "").localeCompare(String(right.title || ""));
-    });
-}
-
-function renderAuthoringLeadCard() {
-  return `
-    <article class="surface-panel authoring-card">
-      <div class="eyebrow">For editors</div>
-      <h3>Write in the full editor</h3>
-      <p>Drafts save as you work, submitted posts open in review preview, and approved posts roll into the next bakedown.</p>
-      <div class="button-row"><a class="button" href="./editor.html">Create post</a></div>
-    </article>
-  `;
 }
 
 function normalizeDraftStatus(status) {
@@ -1046,8 +870,8 @@ function bindReviewPreviewPanel(panel, draft) {
             review_action: action
           }
         });
-        state.publicState = await loadPublicState(true);
-        state.notifications = [];
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "review-action" })).value;
+        notificationState.reset();
         void hydrateNotifications(true);
         if (statusBox instanceof HTMLElement) {
           statusBox.textContent = reviewActionMessage(action);
@@ -1081,33 +905,17 @@ function reviewActionMessage(action) {
 }
 
 async function hydrateNotifications(force = false) {
-  if (!state.session) {
-    state.notifications = [];
-    state.notificationsLoading = false;
-    return;
-  }
   const publicState = await getPublicState();
   if (!editorEntryAllowed(publicState) && !state.viewer) {
     state.viewer = deriveIdentity(state.session.secretKeyHex);
   }
-  if (!state.viewer) return;
-  state.notificationsLoading = true;
-  renderNavigation();
-  try {
-    state.notifications = await buildNotifications(publicState, force);
-  } catch {
-    state.notifications = [];
-  } finally {
-    state.notificationsLoading = false;
-    renderNavigation();
-  }
+  await notificationState.hydrate({ publicState, force });
 }
 
 async function buildNotifications(publicState) {
   const viewer = state.viewer;
   if (!viewer) return [];
   const notifications = [];
-  const seenAt = notificationSeenAt();
   const isAdmin = publicState.admins?.includes(viewer.pubkey);
   const commentMap = new Map((publicState.allComments || []).map((comment) => [comment.id, comment]));
 
@@ -1119,7 +927,6 @@ async function buildNotifications(publicState) {
       id: `comment-reply:${comment.id}`,
       createdAt: comment.created_at,
       href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-      unread: comment.created_at > seenAt,
       label: "Comment reply",
       title: "Someone replied to your comment",
       detail: trimmed(comment.markdown, 100)
@@ -1132,7 +939,6 @@ async function buildNotifications(publicState) {
       id: `submission-status:${status.submission_id}:${status.updated_at}`,
       createdAt: status.updated_at,
       href: "./submit.html",
-      unread: status.updated_at > seenAt,
       label: "Submission update",
       title: `Submission ${status.status}`,
       detail: status.note || "A submission you sent has a new status."
@@ -1150,7 +956,6 @@ async function buildNotifications(publicState) {
         href: normalizeDraftStatus(draft.status) === "revision"
           ? `./editor.html?slug=${encodeURIComponent(draft.slug)}`
           : `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        unread: draft.created_at > seenAt,
         label: "Post review",
         title: reviewNotificationTitle(reviewAction),
         detail: draft.title
@@ -1161,7 +966,6 @@ async function buildNotifications(publicState) {
         id: `pending-draft:${draft.slug}:${draft.created_at}`,
         createdAt: draft.created_at,
         href: `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        unread: draft.created_at > seenAt,
         label: "Review queue",
         title: "New post pending review",
         detail: draft.title
@@ -1176,7 +980,6 @@ async function buildNotifications(publicState) {
         id: `post-comment:${comment.id}`,
         createdAt: comment.created_at,
         href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-        unread: comment.created_at > seenAt,
         label: "Post reply",
         title: "New comment on a published post",
         detail: trimmed(comment.markdown, 100)
@@ -1185,15 +988,11 @@ async function buildNotifications(publicState) {
   }
 
   const submissionNotifications = await loadSubmissionNotifications(publicState, viewer.pubkey, isAdmin);
-  notifications.push(...submissionNotifications.map((item) => ({
-    ...item,
-    unread: item.createdAt > seenAt
-  })));
+  notifications.push(...submissionNotifications);
 
   return notifications
     .sort((left, right) => right.createdAt - left.createdAt)
-    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index)
-    .slice(0, 12);
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
 }
 
 async function loadSubmissionNotifications(publicState, viewerPubkey, isAdmin) {
@@ -1259,41 +1058,6 @@ function notificationSitePubkeys(publicState) {
   ]);
 }
 
-function notificationSeenAt() {
-  if (!state.viewer?.pubkey) return 0;
-  const raw = window.localStorage.getItem(notificationSeenKey(state.viewer.pubkey));
-  const value = Number(raw || 0);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function notificationSeenKey(pubkey) {
-  return `${SITE.nostr.storageNamespace}.notifications.seen.${pubkey}`;
-}
-
-function markNotificationsSeen() {
-  if (!state.viewer?.pubkey || !state.notifications.length) return;
-  const latest = state.notifications.reduce((max, item) => Math.max(max, Number(item.createdAt || 0)), 0);
-  if (!latest) return;
-  window.localStorage.setItem(notificationSeenKey(state.viewer.pubkey), String(latest));
-  state.notifications = state.notifications.map((item) => ({ ...item, unread: false }));
-  const badge = document.querySelector(".profile-menu__notice");
-  if (badge) badge.remove();
-}
-
-function countUnreadNotifications(notifications) {
-  return (Array.isArray(notifications) ? notifications : []).filter((item) => item.unread).length;
-}
-
-function renderNotificationItem(item) {
-  return `
-    <a class="profile-menu__notice-item" href="${escapeAttribute(item.href)}">
-      <span class="profile-menu__notice-label">${escapeHtml(item.label)}</span>
-      <strong>${escapeHtml(item.title)}</strong>
-      <span>${escapeHtml(item.detail || "")}</span>
-    </a>
-  `;
-}
-
 function reviewNotificationTitle(action) {
   if (action === "approve") return "Your post was approved";
   if (action === "deny") return "A post was denied";
@@ -1332,66 +1096,42 @@ function renderEntityCard(entity, posts) {
   `;
 }
 
-function renderLeafletMap(canvas, entities) {
-  if (!window.L) {
-    canvas.innerHTML = `<div class="map-empty">Map library unavailable.</div>`;
-    return;
-  }
-  canvas.innerHTML = "";
-  if (!state.map) {
-    state.map = window.L.map(canvas, {
-      zoomControl: true,
-      scrollWheelZoom: false
-    }).setView(SITE.map.defaultCenter, SITE.map.defaultZoom);
-    window.L.tileLayer(SITE.map.tileUrl, {
-      attribution: SITE.map.tileAttribution,
-      minZoom: SITE.map.minZoom
-    }).addTo(state.map);
-  }
-  if (state.markers) state.markers.remove();
-  state.markers = window.L.layerGroup().addTo(state.map);
+function destroyLeafletMap() {
+  destroySurfaceLeafletMap(state);
+}
 
-  const points = [];
-  for (const entity of entities) {
-    if (!Number.isFinite(entity.lat) || !Number.isFinite(entity.lng)) continue;
-    points.push([entity.lat, entity.lng]);
-    const marker = window.L.circleMarker([entity.lat, entity.lng], {
-      radius: 8,
-      color: "#6f0d09",
-      weight: 2,
-      fillColor: "#b3201a",
-      fillOpacity: 0.88
-    }).addTo(state.markers);
-    marker.bindPopup(`
-      <div class="map-popup">
-        <strong>${escapeHtml(entity.name)}</strong>
-        <div>${escapeHtml(entity.location)}</div>
-        <a href="./map.html?entity=${encodeURIComponent(entity.slug)}">Open entry</a>
-      </div>
-    `);
-    marker.on("click", () => {
-      const card = document.querySelector(`[data-entity-card="${entity.slug}"]`);
-      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-  }
+function mapSurfaceDeps() {
+  return {
+    mapState: state,
+    renderEntityCard,
+    renderLeafletMapSurface: (canvas, entities) =>
+      renderLeafletMapSurface(canvas, entities, state, {
+        escapeHtml,
+        scheduleMapEntityFocus,
+        queryEntityCard: (slug) => document.querySelector(`[data-entity-card="${slug}"]`)
+      }),
+    bindMapEntityCards: () => bindMapSurfaceEntityCards((slug) => scheduleMapEntityFocus(slug)),
+    focusRequestedEntity
+  };
+}
 
-  if (points.length) {
-    state.map.fitBounds(points, { padding: [40, 40] });
-  } else {
-    state.map.setView(SITE.map.defaultCenter, SITE.map.defaultZoom);
-  }
-
-  window.setTimeout(() => state.map?.invalidateSize(), 50);
+function scheduleMapEntityFocus(slug, options = {}, attempt = 0) {
+  scheduleSurfaceMapEntityFocus(
+    slug,
+    state,
+    {
+      cleanSlug,
+      queryEntityCard: (value) => document.querySelector(`[data-entity-card="${value}"]`)
+    },
+    options,
+    attempt
+  );
 }
 
 function focusRequestedEntity() {
-  const requested = cleanSlug(new URLSearchParams(window.location.search).get("entity") || "");
+  const requested = requestedMapEntity(window.location.search, cleanSlug);
   if (!requested) return;
-  const card = document.querySelector(`[data-entity-card="${requested}"]`);
-  if (card) {
-    card.classList.add("entity-card--focus");
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+  scheduleMapEntityFocus(requested);
 }
 
 async function getPublicState() {
@@ -1401,12 +1141,10 @@ async function getPublicState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
-    await ensurePublicStateRepairPeer();
-    state.publicState = await loadPublicState();
+    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "get-public-state" })).value;
     if (state.session && !state.viewer) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
     }
-    void maybeRequestPublicStateRepair(state.publicState, "get-public-state");
     if (state.session) {
       void hydrateNotifications();
     }
@@ -1417,35 +1155,11 @@ async function getPublicState() {
       connected: false,
       approvedEntities: [],
       commentsByPost: new Map(),
+      commentIndex: new Map(),
+      commentThreadsByPost: new Map(),
       admins: []
     };
     return state.publicState;
-  }
-}
-
-async function maybeRequestPublicStateRepair(publicState, reason = "") {
-  if (!publicStateNeedsRepair(publicState) || state.publicStateRepairInFlight) return;
-  const now = Date.now();
-  if (now - state.publicStateRepairRequestedAt < 45000) return;
-  let secretKeyHex = state.session?.secretKeyHex || state.guestSession?.secretKeyHex || "";
-  if (!secretKeyHex) {
-    await ensureEventToolsLoaded();
-    state.guestSession = await getOrCreateGuestSession().catch(() => null);
-    secretKeyHex = state.guestSession?.secretKeyHex || "";
-  }
-  if (!secretKeyHex) return;
-  state.publicStateRepairInFlight = true;
-  state.publicStateRepairRequestedAt = now;
-  try {
-    await requestPublicStateRepair(secretKeyHex, {
-      reason,
-      page: document.body.dataset.page || "site",
-      knownEventCount: Array.isArray(publicState?.rawEvents) ? publicState.rawEvents.length : 0
-    });
-  } catch {
-    return;
-  } finally {
-    state.publicStateRepairInFlight = false;
   }
 }
 

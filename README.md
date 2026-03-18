@@ -23,9 +23,16 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - `content/blog/`: committed blog markdown and index manifest
 - `content/data/entities.json`: committed baked entity seed data
 - `ARCHITECTURE.md`: generic host-app contract and live-overlay model
+- `BROWSER_SUPPORT.md`: browser compatibility and progressive-enhancement contract
+- `COMPONENTS.md`: reusable component families and expectations
+- `CONTRIBUTING.md`: branch-purpose-squash workflow contract
 - `INTEGRATION.md`: how the framework should consume a generic CRDT transport
+- `ROADMAP.md`: current completion status and next tightening priorities
+- `STYLE_GUIDE.md`: reusable UI contract
+- `TESTING.md`: regression and validation contract
 - `scripts/`: browser entrypoints and template implementation
 - `scripts/core/`: site config, session, content, and Nostr helpers
+- `scripts/template/surfaces/`: reusable template-level navigation, archive, comment, workspace, workspace-action, map, and editor-shell surface modules
 - `portable/`: source-of-truth reusable Nostr/CMS logic
 - `support-lib/`: minified reusable browser package built from `portable/`
 - `peer-pinner/`: self-hosted relay mirror / fulfillment gate package
@@ -46,6 +53,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 ## Operating model
 
 See `ARCHITECTURE.md` for the intended long-term split between generic transport, host-app trust policy, and site-specific implementation.
+See `COMPONENTS.md`, `STYLE_GUIDE.md`, and `BROWSER_SUPPORT.md` for the reusable surface and compatibility contracts.
 
 The intended workflow is:
 

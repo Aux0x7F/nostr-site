@@ -5,6 +5,11 @@ export { createNostrCrdtBridge } from "../portable/crdt-transport.js";
 export { createStaticPageOverlayApi } from "../portable/static-page-overlay.js";
 export { createStructuredUnitOverlayApi } from "../portable/structured-unit-overlay.js";
 export {
+  buildCommentThreadState,
+  compareCommentRepliesChronologically,
+  compareCommentRootsByScore
+} from "../portable/comment-state.js";
+export {
   parseContentDocument,
   enrichEntityReferences,
   collectEntityRefsFromText,
