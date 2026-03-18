@@ -16,10 +16,12 @@
 - Notification state and profile-menu UI state now live in dedicated core modules instead of controller-local toggles and storage logic.
 - Submit-shell rendering now lives in a dedicated template surface module, so the modal family matches the rest of the extracted surface split.
 - Workspace picker and filter suggestion markup now live in dedicated template surface modules instead of staying embedded in admin controllers.
+- The template root controller is now reduced to a route/bootstrap entrypoint backed by explicit `scripts/core`, `scripts/template/features`, and `scripts/template/surfaces` layers.
 
 ## Next Tightening Step
 
 - Expand the normalized template shell into richer collaborative rails, broader live-unit overlays, and stronger downstream browser validation.
+- Apply the same controller-to-feature reduction pattern to the remaining heavy admin/workspace controllers so the template no longer has one large secondary root script.
 
 That specifically means:
 

@@ -25,7 +25,8 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - `docs/`: contract, security, and roadmap documents for the framework
 - `docs/README.md`: index of framework architecture, integration, component, testing, browser-support, and security contracts
 - `scripts/`: browser entrypoints and template implementation
-- `scripts/core/`: site config, session, content, and Nostr helpers
+- `scripts/core/`: shared framework services, stores, and controllers
+- `scripts/template/features/`: route-owned template feature orchestration
 - `scripts/template/surfaces/`: reusable template-level navigation, archive, comment, workspace, workspace-action, map, and editor-shell surface modules
 - `portable/`: source-of-truth reusable Nostr/CMS logic
 - `support-lib/`: minified reusable browser package built from `portable/`

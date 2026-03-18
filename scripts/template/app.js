@@ -5,42 +5,53 @@ import {
   parseContentDocument,
   slugify
 } from "../core/content-utils.js";
+import { formatDate, sortDateValue } from "../core/formatting.js";
+import { fetchJson, fetchText } from "../core/http.js";
+import { setText } from "../core/dom.js";
 import {
   cleanSlug,
   deriveIdentity,
-  ensureEventToolsLoaded,
   ensureBlobAvailable,
+  ensureEventToolsLoaded,
   loadAdminKeyShare,
   loadInboxSubmissions,
   loadSubmissionThread,
   loadUserSubmissions,
-  publishTaggedJson,
+  publishTaggedJson
 } from "../core/nostr.js";
 import { createPublicStateStore } from "../core/public-state-store.js";
+import { createContentPostStore } from "../core/posts-store.js";
 import {
-  clampNotificationsPanel,
-  closeProfileMenu,
-  createNavigationUiState,
-  keepProfileMenuOpen,
-  toggleNotificationsPanel,
-  toggleProfileMenu
-} from "../core/navigation-state.js";
+  buildToc,
+  renderError,
+  renderLoadingState,
+  renderMiniMarkdown,
+  renderRecordList,
+  renderTagList
+} from "../core/rendering.js";
+import { createViewerController } from "../core/viewer-controller.js";
+import { createNavigationUiState } from "../core/navigation-state.js";
+import { createNotificationState } from "../core/notification-state.js";
+import { createSiteNotificationBuilder } from "../core/notification-builders.js";
 import {
-  countNotificationItems,
-  createNotificationState
-} from "../core/notification-state.js";
-import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
-import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
-import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
+  draftReviewAction,
+  draftStatusLabel,
+  normalizeDraftStatus
+} from "../core/draft-review.js";
+import { getStoredGuestSession, getStoredSession } from "../core/session.js";
 import {
   bindMapEntityCards as bindMapSurfaceEntityCards,
-  destroyLeafletMap as destroySurfaceLeafletMap,
   renderLeafletMapSurface,
   renderMapPageSurface,
   requestedMapEntity,
   scheduleMapEntityFocus as scheduleSurfaceMapEntityFocus
 } from "./surfaces/map.js";
-import { renderNavigationMarkup, profileInitials } from "./surfaces/navigation.js";
+import { renderPostCard } from "./surfaces/archive.js";
+import { createContentPagesFeature } from "./features/content-pages.js";
+import { createMapPageFeature } from "./features/map-page.js";
+import { createPostDetailFeature } from "./features/post-detail.js";
+import { createSiteRuntime } from "./features/site-runtime.js";
+import { createSiteShellFeature } from "./features/site-shell.js";
 
 const NAV_KEYS = {
   home: ["home"],
@@ -54,18 +65,25 @@ const NAV_KEYS = {
   workspace: ["workspace"]
 };
 
-const dateFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  day: "numeric",
-  year: "numeric"
-});
 const navigationUi = createNavigationUiState();
+let appRuntime = null;
 
 const publicStateStore = createPublicStateStore({
-  getSessionSecretKey: getRequestSignerSecretKey,
+  getSessionSecretKey: async () => (appRuntime ? appRuntime.getRequestSignerSecretKey() : ""),
   page: () => document.body.dataset.page || "site",
   refreshDelayMs: () => 0,
   shouldRefresh: () => false
+});
+
+const postsStore = createContentPostStore({
+  indexPath: "./content/blog/index.json",
+  contentDir: "./content/blog",
+  cacheKey: `${SITE.nostr.storageNamespace}.blog-cache`,
+  initialPosts: [],
+  fetchJson,
+  fetchText,
+  parseContentDocument,
+  slugify
 });
 
 const state = {
@@ -73,7 +91,6 @@ const state = {
   guestSession: getStoredGuestSession(),
   viewer: null,
   publicState: publicStateStore.value,
-  postsPromise: null,
   commentReply: null,
   navigationUi,
   map: null,
@@ -83,1244 +100,129 @@ const state = {
   pendingMapEntitySlug: ""
 };
 
-const notificationState = createNotificationState({
-  storageNamespace: SITE.nostr.storageNamespace,
-  onChange: () => renderNavigation(),
-  getSession: () => state.session,
-  getViewerPubkey: () => state.viewer?.pubkey || "",
-  getPublicState: (force) => getPublicState(force),
-  buildNotifications: ({ publicState, force }) => buildNotifications(publicState, force)
+const viewerController = createViewerController({
+  state,
+  site: SITE,
+  deriveIdentity
 });
 
-publicStateStore.subscribe((snapshot) => {
-  state.publicState = snapshot.value;
+let siteShellFeature = null;
+
+const buildSiteNotifications = createSiteNotificationBuilder({
+  deps: {
+    loadAdminKeyShare,
+    loadInboxSubmissions,
+    loadSubmissionThread,
+    loadUserSubmissions
+  }
+});
+
+const notificationState = createNotificationState({
+  storageNamespace: SITE.nostr.storageNamespace,
+  onChange: () => siteShellFeature?.renderNavigation(),
+  getSession: () => state.session,
+  getViewerPubkey: () => state.viewer?.pubkey || "",
+  getPublicState: (force) => appRuntime?.getPublicState(force),
+  buildNotifications: ({ publicState }) =>
+    buildSiteNotifications({
+      publicState,
+      viewer: state.viewer,
+      sessionSecretKeyHex: state.session?.secretKeyHex || ""
+    })
+});
+
+appRuntime = createSiteRuntime({
+  site: SITE,
+  state,
+  publicStateStore,
+  viewerController,
+  notificationState,
+  postsStore,
+  ensureEventToolsLoaded,
+  publishTaggedJson,
+  ensureBlobAvailable
+});
+
+const contentPagesFeature = createContentPagesFeature({
+  site: SITE,
+  state,
+  viewerController,
+  postsStore,
+  getPublicState: (force) => appRuntime.getPublicState(force),
+  publishTaggedJson,
+  renderLoadingState,
+  renderError,
+  renderTagList,
+  renderMiniMarkdown,
+  buildToc,
+  fetchText,
+  slugify,
+  enrichEntityReferences,
+  parseContentDocument,
+  draftHelpers: {
+    list: (drafts) => (Array.isArray(drafts) ? drafts : []),
+    draftReviewAction,
+    draftStatusLabel,
+    normalizeDraftStatus,
+    sortDateValue
+  }
+});
+
+const mapPageFeature = createMapPageFeature({
+  state,
+  postsStore,
+  getPublicState: (force) => appRuntime.getPublicState(force),
+  collectEntityRefsFromText,
+  renderMapPageSurface,
+  renderLeafletMapSurface,
+  bindMapEntityCards: bindMapSurfaceEntityCards,
+  requestedMapEntity,
+  scheduleLeafletFocus: scheduleSurfaceMapEntityFocus,
+  cleanSlug,
+  renderError,
+  renderLoadingState
+});
+
+siteShellFeature = createSiteShellFeature({
+  site: SITE,
+  state,
+  navKeys: NAV_KEYS,
+  notificationState,
+  viewerController,
+  refreshAvatarFromCache: (target) => appRuntime.refreshAvatarFromCache(target)
+});
+
+const postDetailFeature = createPostDetailFeature({
+  site: SITE,
+  state,
+  viewerController,
+  postsStore,
+  getPublicState: (force) => appRuntime.getPublicState(force),
+  publishTaggedJson,
+  publicStateStore,
+  notificationState,
+  hydrateNotifications: (force) => appRuntime.hydrateNotifications(force),
+  contentPagesFeature,
+  renderLoadingState,
+  renderError,
+  renderTagList,
+  renderRecordList,
+  renderPostCard,
+  setText,
+  formatDate
 });
 
 document.addEventListener("DOMContentLoaded", () => {
-  initExternalLinks();
-  initNavigation();
-  initBlogCards();
-  void initPostDetail();
-  void initMarkdownArticles();
-  void initMapPage();
-  void initAuthoringEntry();
+  siteShellFeature.mount();
+  contentPagesFeature.mountCards();
+  void postDetailFeature.mount();
+  contentPagesFeature.initMarkdownArticles();
+  mapPageFeature.mount();
+  appRuntime.connectFeatures({
+    contentPagesFeature,
+    mapPageFeature,
+    postDetailFeature,
+    siteShellFeature
+  });
+  appRuntime.start();
 });
-
-function initNavigation() {
-  const toggle = document.querySelector("[data-nav-toggle]");
-  const nav = document.querySelector("[data-site-nav]");
-  if (!nav) return;
-
-  const setNavigationOpen = (open) => {
-    nav.classList.toggle("is-open", open);
-    document.body.classList.toggle("is-nav-open", open);
-    if (toggle) {
-      toggle.classList.toggle("is-open", open);
-      toggle.setAttribute("aria-expanded", String(open));
-      toggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
-      toggle.setAttribute("title", open ? "Close navigation" : "Open navigation");
-    }
-  };
-
-  renderNavigation();
-
-  if (toggle) {
-    toggle.innerHTML = `
-      <span class="nav-toggle__bars" aria-hidden="true">
-        <span></span>
-        <span></span>
-        <span></span>
-      </span>
-      <span class="sr-only">Open navigation</span>
-    `;
-    toggle.addEventListener("click", () => {
-      setNavigationOpen(!nav.classList.contains("is-open"));
-    });
-  }
-
-  window.addEventListener("resize", () => {
-    if (window.innerWidth > 980) setNavigationOpen(false);
-  });
-
-  document.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-
-    const submenuToggle = target.closest("[data-submenu-toggle]");
-    if (submenuToggle) {
-      const group = submenuToggle.closest("[data-nav-group]");
-      if (group) {
-        const next = !group.classList.contains("is-open");
-        for (const openGroup of document.querySelectorAll("[data-nav-group].is-open")) {
-          if (openGroup !== group) openGroup.classList.remove("is-open");
-        }
-        group.classList.toggle("is-open", next);
-      }
-      return;
-    }
-
-    const profileToggle = target.closest("[data-profile-toggle]");
-    if (profileToggle) {
-      toggleProfileMenu(state.navigationUi);
-      renderNavigation();
-      return;
-    }
-
-    if (target.closest("[data-notification-toggle]")) {
-      event.preventDefault();
-      toggleNotificationsPanel(state.navigationUi, {
-        count: countNotificationItems(notificationState.items),
-        loading: notificationState.loading
-      });
-      renderNavigation();
-      return;
-    }
-
-    if (target.closest("[data-clear-notifications]")) {
-      event.preventDefault();
-      notificationState.clear();
-      keepProfileMenuOpen(state.navigationUi);
-      clampNotificationsPanel(state.navigationUi, { count: 0, loading: false });
-      renderNavigation();
-      return;
-    }
-
-    const notificationLink = target.closest("[data-notification-link]");
-    if (notificationLink) {
-      notificationState.dismiss(notificationLink.getAttribute("data-notification-link") || "");
-      clampNotificationsPanel(state.navigationUi, {
-        count: countNotificationItems(notificationState.items),
-        loading: notificationState.loading
-      });
-      return;
-    }
-
-    if (target.closest("[data-signout]")) {
-      event.preventDefault();
-      clearSession();
-      state.session = null;
-      state.viewer = null;
-      setNavigationOpen(false);
-      renderNavigation();
-      window.location.reload();
-      return;
-    }
-
-    for (const menu of document.querySelectorAll("[data-profile-menu].is-open")) {
-      if (!menu.contains(target)) {
-        closeProfileMenu(state.navigationUi);
-        renderNavigation();
-      }
-    }
-    for (const group of document.querySelectorAll("[data-nav-group].is-open")) {
-      if (!group.contains(target)) group.classList.remove("is-open");
-    }
-  });
-
-  document.addEventListener("error", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLImageElement) || !target.matches("[data-avatar-sha]")) return;
-    if (target.dataset.refreshing === "yes") return;
-    target.dataset.refreshing = "yes";
-    void refreshAvatarFromCache(target);
-  }, true);
-
-  void bootstrapRelayState();
-}
-
-async function bootstrapRelayState() {
-  try {
-    await ensureEventToolsLoaded();
-    if (!state.guestSession) {
-      state.guestSession = await getOrCreateGuestSession().catch(() => null);
-    }
-    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "bootstrap" })).value;
-    if (state.session) {
-      state.viewer = deriveIdentity(state.session.secretKeyHex);
-    }
-  } catch {
-    state.publicState = state.publicState || publicStateStore.value;
-  }
-  void publishVisitPulse();
-  void hydrateNotifications();
-  renderNavigation();
-}
-
-function renderNavigation() {
-  const nav = document.querySelector("[data-site-nav]");
-  if (!nav) return;
-
-  const page = document.body.dataset.page || "";
-  const isLoggedIn = Boolean(state.session);
-  const currentUser = isLoggedIn && state.viewer
-    ? state.publicState?.users?.find((user) => user.pubkey === state.viewer.pubkey) || null
-    : null;
-  const isAdmin = Boolean(
-    isLoggedIn &&
-      state.viewer &&
-      state.publicState?.admins?.includes(state.viewer.pubkey)
-  );
-  const notifications = isLoggedIn ? notificationState.items.slice(0, 8) : [];
-  const notificationsExpanded = clampNotificationsPanel(state.navigationUi, {
-    count: countNotificationItems(notifications),
-    loading: notificationState.loading
-  });
-  const mapEnabled = Boolean(state.publicState?.connected || state.publicState?.approvedEntities?.length);
-  nav.innerHTML = renderNavigationMarkup({
-    page,
-    navKeys: NAV_KEYS,
-    isLoggedIn,
-    isAdmin,
-    currentUser,
-    sessionUsername: state.session?.username || "",
-    notifications,
-    notificationsLoading: notificationState.loading,
-    profileMenuOpen: state.navigationUi.profileMenuOpen,
-    notificationsExpanded,
-    mapEnabled,
-    deps: {
-      countUnreadNotifications: countNotificationItems,
-      escapeAttribute,
-      escapeHtml
-    }
-  });
-
-  for (const disabled of nav.querySelectorAll('[aria-disabled="true"]')) {
-    disabled.addEventListener("click", (event) => event.preventDefault(), { once: false });
-  }
-}
-
-function initExternalLinks() {
-  setHrefFor("[data-donate-link]", SITE.donateUrl);
-  setHrefFor("[data-merch-link]", SITE.merchUrl);
-  setHrefFor("[data-youtube-link]", SITE.youtubeUrl);
-  for (const link of document.querySelectorAll("[data-contact-email]")) {
-    link.href = `mailto:${SITE.contactEmail}`;
-    if (!link.textContent.trim()) link.textContent = SITE.contactEmail;
-  }
-}
-
-async function initBlogCards() {
-  const homeGrid = document.querySelector("[data-home-posts]");
-  const listGrid = document.querySelector("[data-blog-list]");
-  if (!homeGrid && !listGrid) return;
-
-  try {
-    const posts = await loadPosts();
-    const publicState = await getPublicState();
-    const canEdit = editorEntryAllowed(publicState);
-    if (homeGrid) {
-      const count = Number(homeGrid.getAttribute("data-count") || "2");
-      homeGrid.innerHTML = posts
-        .filter((post) => post.featured)
-        .slice(0, count)
-        .map((post) => renderPostCard(post, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
-        .join("");
-    }
-    if (listGrid) {
-      const entries = canEdit
-        ? buildBlogArchiveEntries(posts, publicState.drafts || [], {
-            draftReviewAction,
-            draftStatusLabel,
-            normalizeDraftStatus,
-            sortDateValue
-          })
-        : posts.map((post) => ({
-            ...post,
-            archiveStatus: "posted",
-            statusLabel: "Posted",
-            href: `./post.html?slug=${encodeURIComponent(post.slug)}`,
-            actionLabel: "Open post"
-          }));
-      listGrid.innerHTML = `
-        ${canEdit ? renderAuthoringLeadCard() : ""}
-        ${entries.map((post) => renderPostCard(post, false, { escapeAttribute, escapeHtml, formatDate, renderTagList })).join("")}
-      `;
-    }
-  } catch {
-    renderError(homeGrid || listGrid, "Blog feed unavailable.");
-  }
-}
-
-async function initAuthoringEntry() {
-  const host = document.querySelector("[data-authoring-entry]");
-  if (!host) return;
-  const publicState = await getPublicState();
-  if (!editorEntryAllowed(publicState)) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = `<a class="button" href="./editor.html">Create post</a>`;
-}
-
-async function initPostDetail() {
-  const article = document.querySelector("[data-post-article]");
-  if (!article) return;
-  article.innerHTML = renderLoadingState("Looking up article...");
-  const commentPanel = document.querySelector("[data-comment-panel]");
-  const reviewPanel = document.querySelector("[data-post-review]");
-  if (commentPanel) commentPanel.innerHTML = renderLoadingState("Looking up discussion...");
-
-  try {
-    const posts = await loadPosts();
-    const publicState = await getPublicState();
-    const params = new URLSearchParams(window.location.search);
-    const slug = cleanSlug(params.get("slug") || "");
-    const draftSlug = cleanSlug(params.get("draft") || "");
-    const canReview = editorEntryAllowed(publicState);
-    const draft = draftSlug
-      ? (publicState.drafts || []).find((item) => item.slug === draftSlug) || null
-      : null;
-    const isDraftPreview = Boolean(draft && canReview);
-    if (draftSlug && !isDraftPreview) {
-      throw new Error("Draft preview unavailable.");
-    }
-    const post = isDraftPreview
-      ? draftToPostPreview(draft)
-      : posts.find((item) => item.slug === slug) || posts[0];
-    if (!post) throw new Error("No posts found.");
-
-    renderMarkdown(article, post.body);
-    setText("[data-post-title]", post.title);
-    setText("[data-post-summary]", post.summary);
-    setText("[data-post-date]", formatDate(post.date));
-    setText("[data-post-location]", post.location);
-    setText("[data-post-status]", post.statusLabel || post.status);
-    const tags = document.querySelector("[data-post-tags]");
-    if (tags) tags.innerHTML = renderTagList(post.tags);
-    const records = document.querySelector("[data-post-records]");
-    if (records) records.innerHTML = renderRecordList(post.records);
-    const related = document.querySelector("[data-post-related]");
-    if (related) {
-      related.innerHTML = isDraftPreview
-        ? ""
-        : posts
-            .filter((item) => item.slug !== post.slug)
-            .slice(0, 2)
-            .map((item) => renderPostCard(item, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
-            .join("");
-    }
-
-    enrichArticleEntities(article, publicState);
-    if (reviewPanel instanceof HTMLElement) {
-      if (isDraftPreview) {
-        reviewPanel.hidden = false;
-        reviewPanel.innerHTML = renderReviewPreviewPanel(draft);
-        bindReviewPreviewPanel(reviewPanel, draft);
-      } else {
-        reviewPanel.hidden = true;
-        reviewPanel.innerHTML = "";
-      }
-    }
-    if (commentPanel instanceof HTMLElement) {
-      commentPanel.hidden = isDraftPreview;
-      if (!isDraftPreview) {
-        await renderComments(post.slug, publicState);
-      } else {
-        commentPanel.innerHTML = "";
-      }
-    }
-    document.title = `${post.title} | ${SITE.shortName}`;
-  } catch {
-    renderError(article, "This post could not be loaded.");
-    if (reviewPanel instanceof HTMLElement) {
-      reviewPanel.hidden = true;
-      reviewPanel.innerHTML = "";
-    }
-  }
-}
-
-async function initMarkdownArticles() {
-  const article = document.querySelector("[data-markdown-article]");
-  if (!article) return;
-  article.innerHTML = renderLoadingState("Looking up article...");
-
-  try {
-    const source = article.getAttribute("data-markdown-src");
-    if (!source) throw new Error("Markdown source missing.");
-    const markdown = await fetchText(source);
-    renderMarkdown(article, markdown);
-    buildToc(article, document.querySelector("[data-article-toc]"));
-    const publicState = await getPublicState();
-    enrichArticleEntities(article, publicState);
-  } catch {
-    renderError(article, "This article could not be loaded.");
-  }
-}
-
-async function initMapPage() {
-  const list = document.querySelector("[data-map-list]");
-  const canvas = document.querySelector("[data-map-canvas]");
-  if (!list || !canvas) return;
-  list.innerHTML = renderLoadingState("Looking up map entries...");
-  canvas.innerHTML = renderLoadingState("Looking up map data...");
-
-  const publicState = await getPublicState();
-  if (!publicState.approvedEntities.length) {
-    list.innerHTML = `<div class="empty-state">Published entities will appear here once approved entries are available.</div>`;
-    destroyLeafletMap();
-    canvas.innerHTML = `<div class="map-empty">Map data unavailable.</div>`;
-    return;
-  }
-
-  const posts = await loadPosts().catch(() => []);
-  const entityUsage = buildEntityUsage(posts, publicState.approvedEntities);
-  renderMapPageSurface(list, canvas, publicState.approvedEntities, entityUsage, mapSurfaceDeps());
-}
-
-async function renderComments(postSlug, publicState) {
-  const panel = document.querySelector("[data-comment-panel]");
-  if (!panel) return;
-
-  const threadedComments = (publicState.commentThreadsByPost?.get(postSlug) || []).slice();
-  const renderedCount = countRenderedCommentNodes(threadedComments);
-  const isLoggedIn = Boolean(state.session);
-  const isAdmin = Boolean(state.viewer && publicState.admins.includes(state.viewer.pubkey));
-  const currentUser = isLoggedIn && state.viewer
-    ? publicState.users.find((user) => user.pubkey === state.viewer.pubkey) || null
-    : null;
-  const replyTarget = state.commentReply?.postSlug === postSlug
-    ? publicState.commentIndex?.get(state.commentReply.commentId) || null
-    : null;
-  if (state.commentReply?.postSlug === postSlug && !replyTarget) {
-    state.commentReply = null;
-  }
-
-  panel.innerHTML = `
-    <div class="comment-panel__head">
-      <div>
-        <div class="eyebrow">Discussion</div>
-        <h2>Comments</h2>
-      </div>
-      <p>${renderCommentCountLabel(renderedCount)}</p>
-    </div>
-    ${
-      isLoggedIn
-        ? `
-          <section class="comment-composer">
-            ${renderAvatarBadge(currentUser, state.session?.username || "You", "comment-composer__avatar")}
-            <form class="comment-composer__form" data-comment-form>
-              <div class="comment-composer__head">
-                <strong>${replyTarget ? "Write a reply" : "Add a comment"}</strong>
-                <span>${replyTarget ? "Your reply will appear under the selected comment." : "Keep it specific and tied to the post."}</span>
-              </div>
-              ${
-                replyTarget
-                  ? `
-                    <div class="comment-composer__reply">
-                      <span>Replying to ${escapeHtml(commentAuthorLabel(replyTarget, publicState))}</span>
-                      <button class="button-ghost" type="button" data-cancel-reply>Cancel</button>
-                    </div>
-                  `
-                  : ""
-              }
-              <label class="sr-only" for="commentComposerInput">Comment</label>
-              <textarea id="commentComposerInput" class="comment-composer__input" name="markdown" placeholder="${replyTarget ? "Write a reply..." : "Write a comment..."}" required></textarea>
-              <div class="comment-composer__footer">
-                <span class="muted-text">${replyTarget ? "Replying keeps the thread together." : "Comments show up with your profile."}</span>
-                <button class="button" type="submit">${replyTarget ? "Reply" : "Post comment"}</button>
-              </div>
-              <div class="status-box" data-comment-status aria-live="polite"></div>
-            </form>
-          </section>
-        `
-        : `<div class="empty-state">Log in to comment or reply.</div>`
-    }
-    ${
-      threadedComments.length
-        ? `<div class="comment-list">${threadedComments
-            .map((comment) =>
-              renderComment(comment, publicState, { isAdmin, canReply: isLoggedIn }, {
-                escapeAttribute,
-                escapeHtml,
-                formatDateTime,
-                renderAvatarBadge,
-                renderMiniMarkdown
-              })
-            )
-            .join("")}</div>`
-        : isLoggedIn
-          ? `<div class="comment-list"><div class="empty-state">No comments yet. Start the discussion.</div></div>`
-          : ""
-    }
-  `;
-
-  const form = panel.querySelector("[data-comment-form]");
-  if (form) {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const status = panel.querySelector("[data-comment-status]");
-      const textarea = form.elements.namedItem("markdown");
-      const submitButton = form.querySelector('button[type="submit"]');
-      const markdown = String(textarea?.value || "").trim();
-      if (!markdown) return;
-      const activeReply = state.commentReply?.postSlug === postSlug
-        ? comments.find((comment) => comment.id === state.commentReply.commentId) || null
-        : null;
-      const parentId = activeReply?.id || "";
-      const rootId = activeReply ? String(activeReply.root_id || activeReply.parent_id || activeReply.id || "").trim() : "";
-
-      try {
-        const viewer = await getViewer();
-        if (submitButton instanceof HTMLButtonElement) submitButton.disabled = true;
-        if (status) {
-          status.textContent = activeReply ? "Posting reply..." : "Posting comment...";
-          status.dataset.state = "pending";
-        }
-        await publishTaggedJson({
-          kind: SITE.nostr.kinds.comment,
-          secretKeyHex: state.session.secretKeyHex,
-          tags: [
-            ["a", postSlug],
-            ...(parentId ? [["e", parentId], ["parent", parentId]] : []),
-            ...(rootId ? [["root", rootId]] : [])
-          ],
-          content: {
-            post_slug: postSlug,
-            markdown,
-            parent_id: parentId,
-            root_id: rootId
-          }
-        });
-        form.reset();
-        state.commentReply = null;
-        panel.innerHTML = renderLoadingState("Looking up discussion...");
-        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-create" })).value;
-        state.viewer = viewer;
-        await renderComments(postSlug, state.publicState);
-      } catch (error) {
-        if (status) {
-          status.textContent = String(error?.message || error || "Comment failed.");
-          status.dataset.state = "error";
-        }
-      } finally {
-        if (submitButton instanceof HTMLButtonElement) submitButton.disabled = false;
-      }
-    });
-  }
-
-  for (const replyButton of panel.querySelectorAll("[data-reply-comment]")) {
-    replyButton.addEventListener("click", async () => {
-      state.commentReply = {
-        postSlug,
-        commentId: replyButton.getAttribute("data-reply-comment") || ""
-      };
-      await renderComments(postSlug, publicState);
-      const input = panel.querySelector("#commentComposerInput");
-      if (input instanceof HTMLTextAreaElement) input.focus();
-    });
-  }
-
-  const cancelReply = panel.querySelector("[data-cancel-reply]");
-  if (cancelReply) {
-    cancelReply.addEventListener("click", async () => {
-      state.commentReply = null;
-      await renderComments(postSlug, publicState);
-    });
-  }
-
-  for (const button of panel.querySelectorAll("[data-hide-comment]")) {
-    button.addEventListener("click", async () => {
-      try {
-        panel.innerHTML = renderLoadingState("Looking up discussion...");
-        await publishTaggedJson({
-          kind: SITE.nostr.kinds.commentMod,
-          secretKeyHex: state.session.secretKeyHex,
-          tags: [["e", button.getAttribute("data-hide-comment") || ""], ["op", "hide"]],
-          content: {
-            target_id: button.getAttribute("data-hide-comment") || "",
-            action: "hide"
-          }
-        });
-        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-hide" })).value;
-        await renderComments(postSlug, state.publicState);
-      } catch {
-        return;
-      }
-    });
-  }
-}
-
-function countRenderedCommentNodes(nodes) {
-  return (Array.isArray(nodes) ? nodes : []).reduce(
-    (total, node) => total + 1 + countRenderedCommentNodes(node?.replies || []),
-    0
-  );
-}
-
-function commentAuthorLabel(comment, publicState) {
-  const author = publicState.users.find((user) => user.pubkey === comment.author);
-  return author?.displayName || author?.username || "User";
-}
-
-function renderAvatarBadge(user, fallbackLabel, className) {
-  const label = user?.displayName || user?.username || fallbackLabel || "Profile";
-  if (user?.avatarUrl) {
-    const blob = user.avatarBlob;
-    const blobAttrs = blob?.sha256
-      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || user.avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
-      : "";
-    return `<span class="${className} ${className}--image"><img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}></span>`;
-  }
-  return `<span class="${className}">${escapeHtml(profileInitials(label))}</span>`;
-}
-
-function normalizeDraftStatus(status) {
-  return String(status || "").trim().toLowerCase();
-}
-
-function draftReviewAction(draft) {
-  const tag = Array.isArray(draft?._event?.tags)
-    ? draft._event.tags.find((item) => Array.isArray(item) && item[0] === "review")
-    : null;
-  return String(tag?.[1] || "").trim().toLowerCase();
-}
-
-function draftStatusLabel(status, reviewAction = "") {
-  const clean = normalizeDraftStatus(status);
-  const action = String(reviewAction || "").trim().toLowerCase();
-  if (["candidate", "review", "submitted"].includes(clean)) return "Submitted";
-  if (clean === "approved") return "Approved";
-  if (clean === "revision" || action === "revise") return "Revision requested";
-  if (clean === "denied" || action === "deny") return "Denied";
-  return "Draft";
-}
-
-function renderRecordList(records) {
-  if (!Array.isArray(records) || !records.length) {
-    return `<div class="empty-state">No structured notes attached to this post.</div>`;
-  }
-  return records
-    .map((record) => {
-      const label = escapeHtml(String(record.label || "Untitled note"));
-      const note = record.note ? `<small>${escapeHtml(String(record.note))}</small>` : "";
-      if (record.href) {
-        return `<a class="record-item" href="${escapeAttribute(record.href)}"><strong>${label}</strong>${note}</a>`;
-      }
-      return `<div class="record-item"><strong>${label}</strong>${note}</div>`;
-    })
-    .join("");
-}
-
-function renderMarkdown(node, markdown) {
-  if (window.marked) {
-    window.marked.setOptions({ gfm: true, breaks: false });
-    node.innerHTML = window.marked.parse(String(markdown || ""));
-  } else {
-    node.innerHTML = renderMiniMarkdown(markdown);
-  }
-
-  for (const heading of node.querySelectorAll("h2, h3")) {
-    heading.id = heading.id || slugify(heading.textContent || "section");
-  }
-
-  for (const link of node.querySelectorAll("a[href]")) {
-    const href = link.getAttribute("href") || "";
-    if (/^https?:\/\//.test(href)) {
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-    }
-  }
-}
-
-function enrichArticleEntities(scope, publicState) {
-  if (!scope || !publicState?.approvedEntities?.length) return;
-  enrichEntityReferences(scope, publicState.approvedEntities);
-}
-
-function buildToc(article, target) {
-  if (!target) return;
-  const items = [...article.querySelectorAll("h2, h3")];
-  if (!items.length) {
-    target.innerHTML = "<p>No sections available.</p>";
-    return;
-  }
-  target.innerHTML = items
-    .map(
-      (item) => `
-        <a class="toc-link toc-link--${item.tagName.toLowerCase()}" href="#${escapeAttribute(item.id)}">
-          ${escapeHtml(item.textContent || "")}
-        </a>
-      `
-    )
-    .join("");
-}
-
-async function loadPosts() {
-  if (!state.postsPromise) {
-    state.postsPromise = fetchJson("./content/blog/index.json")
-      .then((data) => Promise.all((Array.isArray(data.files) ? data.files : []).map((file) => loadPost(file))))
-      .then((posts) => posts.filter(Boolean).sort((left, right) => String(right.date || "").localeCompare(String(left.date || ""))));
-  }
-  return state.postsPromise;
-}
-
-async function loadPost(file) {
-  const text = await fetchText(`./content/blog/${file}`);
-  const parsed = parseContentDocument(text, {
-    file,
-    slug: slugify(file.replace(/\.md$/i, ""))
-  });
-  return {
-    ...parsed.meta,
-    file,
-    slug: parsed.meta.slug || slugify(file.replace(/\.md$/i, "")),
-    body: parsed.body
-  };
-}
-
-function buildEntityUsage(posts, entities) {
-  const usage = new Map();
-  for (const post of posts) {
-    const refs = new Set([
-      ...(Array.isArray(post.entity_refs) ? post.entity_refs : []),
-      ...collectEntityRefsFromText(post.body, entities)
-    ]);
-    for (const slug of refs) {
-      const list = usage.get(slug) || [];
-      list.push({
-        slug: post.slug,
-        title: post.title,
-        date: post.date
-      });
-      usage.set(slug, list);
-    }
-  }
-  return usage;
-}
-
-function draftOwnerPubkey(draft) {
-  const revisions = Array.isArray(draft?.revisions) ? draft.revisions : [];
-  const oldest = revisions.length ? revisions[revisions.length - 1] : null;
-  return String(oldest?.author || draft?.author || "").trim().toLowerCase();
-}
-
-function draftToPostPreview(draft) {
-  const reviewAction = draftReviewAction(draft);
-  return {
-    ...draft,
-    body: draft.markdown || "",
-    statusLabel: draftStatusLabel(draft.status, reviewAction),
-    records: [],
-    tags: Array.isArray(draft.tags) ? draft.tags : [],
-    title: draft.title || "Untitled post",
-    summary: draft.summary || "No summary added yet.",
-    location: draft.location || "Draft location pending"
-  };
-}
-
-function renderReviewPreviewPanel(draft) {
-  const status = normalizeDraftStatus(draft.status);
-  const owner = state.publicState?.users?.find((user) => user.pubkey === draftOwnerPubkey(draft)) || null;
-  const ownerLabel = owner?.displayName || owner?.username || shortReviewKey(draftOwnerPubkey(draft));
-  const reviewAction = draftReviewAction(draft);
-  const canReview = ["candidate", "review", "submitted"].includes(status);
-  return `
-    <div class="eyebrow">Review preview</div>
-    <h3>${escapeHtml(draftStatusLabel(status, reviewAction))}</h3>
-    <p class="muted-text">Submitted by ${escapeHtml(ownerLabel)}. This view is read-only so the decision happens against what was actually submitted.</p>
-    <div class="tag-row">
-      <span class="tag">${escapeHtml(draftStatusLabel(status, reviewAction))}</span>
-      <span class="tag">${escapeHtml(formatDate(draft.date))}</span>
-    </div>
-    <div class="button-row button-row--tight">
-      ${
-        canReview
-          ? `
-            <button class="button" type="button" data-review-action="approve" data-draft-slug="${escapeAttribute(draft.slug)}">Approve</button>
-            <button class="button-ghost" type="button" data-review-action="revise" data-draft-slug="${escapeAttribute(draft.slug)}">Request revision</button>
-            <button class="button-ghost" type="button" data-review-action="deny" data-draft-slug="${escapeAttribute(draft.slug)}">Deny</button>
-          `
-          : normalizeDraftStatus(draft.status) === "revision"
-            ? `<a class="button-ghost" href="./editor.html?slug=${encodeURIComponent(draft.slug)}">Open in editor</a>`
-            : `<a class="button-ghost" href="./blog.html">Back to blog</a>`
-      }
-    </div>
-    <div class="status-box" data-review-status aria-live="polite"></div>
-  `;
-}
-
-function bindReviewPreviewPanel(panel, draft) {
-  const buttons = panel.querySelectorAll("[data-review-action]");
-  for (const button of buttons) {
-    button.addEventListener("click", async () => {
-      const action = button.getAttribute("data-review-action") || "";
-      const statusBox = panel.querySelector("[data-review-status]");
-      if (!state.session || !editorEntryAllowed(state.publicState)) return;
-      button.setAttribute("disabled", "disabled");
-      if (statusBox instanceof HTMLElement) {
-        statusBox.textContent = "Saving review decision...";
-        statusBox.dataset.state = "pending";
-      }
-      try {
-        await publishTaggedJson({
-          kind: SITE.nostr.kinds.draft,
-          secretKeyHex: state.session.secretKeyHex,
-          tags: [
-            ["d", draft.slug],
-            ["status", reviewStatusForAction(action)],
-            ["review", action]
-          ],
-          content: {
-            ...draft,
-            author_pubkey: draftOwnerPubkey(draft),
-            status: reviewStatusForAction(action),
-            reviewed_at: new Date().toISOString(),
-            reviewed_by: state.viewer?.pubkey || "",
-            review_action: action
-          }
-        });
-        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "review-action" })).value;
-        notificationState.reset();
-        void hydrateNotifications(true);
-        if (statusBox instanceof HTMLElement) {
-          statusBox.textContent = reviewActionMessage(action);
-          statusBox.dataset.state = "success";
-        }
-        window.setTimeout(() => {
-          window.location.href = "./blog.html";
-        }, 700);
-      } catch (error) {
-        if (statusBox instanceof HTMLElement) {
-          statusBox.textContent = String(error?.message || error || "Review action failed.");
-          statusBox.dataset.state = "error";
-        }
-      } finally {
-        button.removeAttribute("disabled");
-      }
-    });
-  }
-}
-
-function reviewStatusForAction(action) {
-  if (action === "approve") return "approved";
-  if (action === "deny") return "denied";
-  return "revision";
-}
-
-function reviewActionMessage(action) {
-  if (action === "approve") return "Post approved for publish.";
-  if (action === "deny") return "Post denied.";
-  return "Revision requested.";
-}
-
-async function hydrateNotifications(force = false) {
-  const publicState = await getPublicState();
-  if (!editorEntryAllowed(publicState) && !state.viewer) {
-    state.viewer = deriveIdentity(state.session.secretKeyHex);
-  }
-  await notificationState.hydrate({ publicState, force });
-}
-
-async function buildNotifications(publicState) {
-  const viewer = state.viewer;
-  if (!viewer) return [];
-  const notifications = [];
-  const isAdmin = publicState.admins?.includes(viewer.pubkey);
-  const commentMap = new Map((publicState.allComments || []).map((comment) => [comment.id, comment]));
-
-  for (const comment of publicState.comments || []) {
-    if (!comment.parent_id || comment.author === viewer.pubkey) continue;
-    const parent = commentMap.get(comment.parent_id);
-    if (!parent || parent.author !== viewer.pubkey) continue;
-    notifications.push({
-      id: `comment-reply:${comment.id}`,
-      createdAt: comment.created_at,
-      href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-      label: "Comment reply",
-      title: "Someone replied to your comment",
-      detail: trimmed(comment.markdown, 100)
-    });
-  }
-
-  for (const status of publicState.submissionStatuses?.values?.() || []) {
-    if (status.author_pubkey !== viewer.pubkey || status.by === viewer.pubkey) continue;
-    notifications.push({
-      id: `submission-status:${status.submission_id}:${status.updated_at}`,
-      createdAt: status.updated_at,
-      href: "./submit.html",
-      label: "Submission update",
-      title: `Submission ${status.status}`,
-      detail: status.note || "A submission you sent has a new status."
-    });
-  }
-
-  for (const draft of publicState.drafts || []) {
-    const reviewAction = draftReviewAction(draft);
-    const ownerPubkey = draftOwnerPubkey(draft);
-    const isPending = ["candidate", "review", "submitted"].includes(normalizeDraftStatus(draft.status));
-    if (ownerPubkey === viewer.pubkey && ["approve", "revise", "deny"].includes(reviewAction)) {
-      notifications.push({
-        id: `draft-review:${draft.slug}:${draft.created_at}`,
-        createdAt: draft.created_at,
-        href: normalizeDraftStatus(draft.status) === "revision"
-          ? `./editor.html?slug=${encodeURIComponent(draft.slug)}`
-          : `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        label: "Post review",
-        title: reviewNotificationTitle(reviewAction),
-        detail: draft.title
-      });
-    }
-    if (isAdmin && isPending) {
-      notifications.push({
-        id: `pending-draft:${draft.slug}:${draft.created_at}`,
-        createdAt: draft.created_at,
-        href: `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        label: "Review queue",
-        title: "New post pending review",
-        detail: draft.title
-      });
-    }
-  }
-
-  if (isAdmin) {
-    for (const comment of publicState.comments || []) {
-      if (comment.author === viewer.pubkey) continue;
-      notifications.push({
-        id: `post-comment:${comment.id}`,
-        createdAt: comment.created_at,
-        href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-        label: "Post reply",
-        title: "New comment on a published post",
-        detail: trimmed(comment.markdown, 100)
-      });
-    }
-  }
-
-  const submissionNotifications = await loadSubmissionNotifications(publicState, viewer.pubkey, isAdmin);
-  notifications.push(...submissionNotifications);
-
-  return notifications
-    .sort((left, right) => right.createdAt - left.createdAt)
-    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
-}
-
-async function loadSubmissionNotifications(publicState, viewerPubkey, isAdmin) {
-  if (!state.session?.secretKeyHex) return [];
-  const notifications = [];
-  const knownSitePubkeys = notificationSitePubkeys(publicState);
-  const ownSubmissions = await loadUserSubmissions(state.session.secretKeyHex).catch(() => []);
-  const ownThreads = await Promise.all(
-    ownSubmissions.slice(0, 8).map(async (submission) => ({
-      submissionId: submission.id,
-      messages: await loadSubmissionThread(state.session.secretKeyHex, submission.id, knownSitePubkeys).catch(() => [])
-    }))
-  );
-  for (const thread of ownThreads) {
-    for (const message of thread.messages) {
-      if (message.author === viewerPubkey) continue;
-      notifications.push({
-        id: `submission-chat:${thread.submissionId}:${message.id}`,
-        createdAt: Number(message.event?.created_at || 0),
-        href: `./submit.html?chat=${encodeURIComponent(thread.submissionId)}`,
-        label: "Submission chat",
-        title: "New message in a submission thread",
-        detail: trimmed(message.payload?.body || "", 100)
-      });
-    }
-  }
-  if (isAdmin) {
-    const activeSitePubkey = state.publicState?.siteInfo?.activePubkey || "";
-    const share = activeSitePubkey
-      ? await loadAdminKeyShare(state.session.secretKeyHex, activeSitePubkey).catch(() => null)
-      : null;
-    if (share?.siteSecretKeyHex) {
-      const inboxSubmissions = await loadInboxSubmissions(share.siteSecretKeyHex).catch(() => []);
-      const inboxThreads = await Promise.all(
-        inboxSubmissions.slice(0, 8).map(async (submission) => ({
-          submissionId: submission.id,
-          messages: await loadSubmissionThread(share.siteSecretKeyHex, submission.id, [submission.author]).catch(() => [])
-        }))
-      );
-      for (const thread of inboxThreads) {
-        for (const message of thread.messages) {
-          if (message.author === viewerPubkey) continue;
-          notifications.push({
-            id: `admin-chat:${thread.submissionId}:${message.id}`,
-            createdAt: Number(message.event?.created_at || 0),
-            href: `./admin.html?tab=submissions`,
-            label: "Submission chat",
-            title: "New submission message in the shared inbox",
-            detail: trimmed(message.payload?.body || "", 100)
-          });
-        }
-      }
-    }
-  }
-  return notifications;
-}
-
-function notificationSitePubkeys(publicState) {
-  return dedupe([
-    publicState?.siteInfo?.activePubkey || "",
-    publicState?.siteInfo?.fallbackPubkey || "",
-    ...((publicState?.siteInfo?.events || []).map((event) => event.site_pubkey || ""))
-  ]);
-}
-
-function reviewNotificationTitle(action) {
-  if (action === "approve") return "Your post was approved";
-  if (action === "deny") return "A post was denied";
-  return "Revision was requested on your post";
-}
-
-function shortReviewKey(value) {
-  const clean = String(value || "").trim();
-  return clean.length > 12 ? `${clean.slice(0, 8)}...${clean.slice(-4)}` : clean || "Editor";
-}
-
-function renderEntityCard(entity, posts) {
-  return `
-    <article class="entity-card" id="entity-card-${escapeAttribute(entity.slug)}" data-entity-card="${escapeAttribute(entity.slug)}">
-      <div class="eyebrow">${escapeHtml(entity.type || "entity")}</div>
-      <h3>${escapeHtml(entity.name)}</h3>
-      <p>${escapeHtml(entity.location)}</p>
-      <p>${escapeHtml(entity.notes || "Placeholder description for this entity entry.")}</p>
-      <div class="tag-row">
-        <span class="tag">${escapeHtml(entity.status)}</span>
-        ${Number.isFinite(entity.lat) && Number.isFinite(entity.lng) ? `<span class="tag">${escapeHtml(entity.lat.toFixed(2))}, ${escapeHtml(entity.lng.toFixed(2))}</span>` : ""}
-      </div>
-      <div class="entity-card__links">
-        ${
-          posts.length
-            ? posts
-                .map(
-                  (post) =>
-                    `<a href="./post.html?slug=${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a>`
-                )
-                .join("")
-            : `<span class="muted-text">No published posts mention this entry yet.</span>`
-        }
-      </div>
-    </article>
-  `;
-}
-
-function destroyLeafletMap() {
-  destroySurfaceLeafletMap(state);
-}
-
-function mapSurfaceDeps() {
-  return {
-    mapState: state,
-    renderEntityCard,
-    renderLeafletMapSurface: (canvas, entities) =>
-      renderLeafletMapSurface(canvas, entities, state, {
-        escapeHtml,
-        scheduleMapEntityFocus,
-        queryEntityCard: (slug) => document.querySelector(`[data-entity-card="${slug}"]`)
-      }),
-    bindMapEntityCards: () => bindMapSurfaceEntityCards((slug) => scheduleMapEntityFocus(slug)),
-    focusRequestedEntity
-  };
-}
-
-function scheduleMapEntityFocus(slug, options = {}, attempt = 0) {
-  scheduleSurfaceMapEntityFocus(
-    slug,
-    state,
-    {
-      cleanSlug,
-      queryEntityCard: (value) => document.querySelector(`[data-entity-card="${value}"]`)
-    },
-    options,
-    attempt
-  );
-}
-
-function focusRequestedEntity() {
-  const requested = requestedMapEntity(window.location.search, cleanSlug);
-  if (!requested) return;
-  scheduleMapEntityFocus(requested);
-}
-
-async function getPublicState() {
-  if (state.publicState) return state.publicState;
-  try {
-    await ensureEventToolsLoaded();
-    if (!state.guestSession) {
-      state.guestSession = await getOrCreateGuestSession().catch(() => null);
-    }
-    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "get-public-state" })).value;
-    if (state.session && !state.viewer) {
-      state.viewer = deriveIdentity(state.session.secretKeyHex);
-    }
-    if (state.session) {
-      void hydrateNotifications();
-    }
-    renderNavigation();
-    return state.publicState;
-  } catch {
-    state.publicState = {
-      connected: false,
-      approvedEntities: [],
-      commentsByPost: new Map(),
-      commentIndex: new Map(),
-      commentThreadsByPost: new Map(),
-      admins: []
-    };
-    return state.publicState;
-  }
-}
-
-async function getViewer() {
-  if (state.viewer) return state.viewer;
-  if (!state.session) throw new Error("Log in first.");
-  await ensureEventToolsLoaded();
-  state.viewer = deriveIdentity(state.session.secretKeyHex);
-  return state.viewer;
-}
-
-function editorEntryAllowed(publicState) {
-  if (!state.session || !publicState?.admins?.length) return false;
-  if (!state.viewer) {
-    state.viewer = deriveIdentity(state.session.secretKeyHex);
-  }
-  return publicState.admins.includes(state.viewer.pubkey);
-}
-
-async function getRequestSignerSecretKey() {
-  if (state.session?.secretKeyHex) return state.session.secretKeyHex;
-  if (state.guestSession?.secretKeyHex) return state.guestSession.secretKeyHex;
-  await ensureEventToolsLoaded();
-  state.guestSession = await getOrCreateGuestSession().catch(() => null);
-  return state.guestSession?.secretKeyHex || "";
-}
-
-async function publishVisitPulse() {
-  try {
-    const secretKeyHex = await getRequestSignerSecretKey();
-    if (!secretKeyHex || !SITE.nostr.kinds.visitPulse) return;
-    const day = new Date().toISOString().slice(0, 10);
-    const markerKey = `${SITE.nostr.storageNamespace}.visitPulse.${day}`;
-    if (window.localStorage.getItem(markerKey)) return;
-    await publishTaggedJson({
-      kind: SITE.nostr.kinds.visitPulse,
-      secretKeyHex,
-      tags: [
-        ["t", SITE.nostr.appTag],
-        ["k", document.body.dataset.page || "site"]
-      ],
-      content: {
-        day,
-        page: document.body.dataset.page || "site"
-      }
-    });
-    window.localStorage.setItem(markerKey, String(Date.now()));
-  } catch {
-    return;
-  }
-}
-
-async function refreshAvatarFromCache(target) {
-  try {
-    const secretKeyHex = await getRequestSignerSecretKey();
-    if (!secretKeyHex) throw new Error("No request signer available.");
-    const reference = {
-      sha256: target.dataset.avatarSha || "",
-      url: target.dataset.avatarUrl || target.currentSrc || target.src,
-      access: "public",
-      cipher: "none",
-      type: target.dataset.avatarType || "image/jpeg",
-      name: target.dataset.avatarName || "avatar"
-    };
-    await ensureBlobAvailable(secretKeyHex, reference);
-    const src = reference.url;
-    target.src = `${src}${src.includes("?") ? "&" : "?"}refresh=${Date.now()}`;
-  } catch {
-    target.dataset.refreshing = "no";
-  }
-}
-
-async function fetchJson(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Failed to load ${path}`);
-  return response.json();
-}
-
-async function fetchText(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Failed to load ${path}`);
-  return response.text();
-}
-
-function renderError(node, message) {
-  if (!node) return;
-  node.innerHTML = `<div class="empty-state">${escapeHtml(message)}</div>`;
-}
-
-function renderLoadingState(message) {
-  return `
-    <div class="loading-state loading-state--panel" role="status" aria-live="polite">
-      <span class="loading-spinner" aria-hidden="true"></span>
-      <span>${escapeHtml(message)}</span>
-    </div>
-  `;
-}
-
-function renderTagList(tags) {
-  return (Array.isArray(tags) ? tags : [])
-    .map((tag) => `<span class="tag">${escapeHtml(String(tag))}</span>`)
-    .join("");
-}
-
-function renderMiniMarkdown(markdown) {
-  const text = escapeHtml(String(markdown || "")).replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>");
-  return `<p>${text}</p>`;
-}
-
-function setText(selector, value) {
-  const node = document.querySelector(selector);
-  if (node) node.textContent = value;
-}
-
-function setHrefFor(selector, href) {
-  for (const link of document.querySelectorAll(selector)) {
-    link.href = href;
-  }
-}
-
-function formatDate(value) {
-  return value ? dateFormatter.format(new Date(`${value}T00:00:00`)) : "Undated";
-}
-
-function formatDateTime(unixSeconds) {
-  if (!unixSeconds) return "Undated";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(new Date(unixSeconds * 1000));
-}
-
-function sortDateValue(item) {
-  const raw = String(item?.date || "").trim();
-  const parsed = raw ? Date.parse(`${raw}T00:00:00`) : NaN;
-  if (Number.isFinite(parsed)) return parsed;
-  const createdAt = Number(item?.created_at || 0);
-  return Number.isFinite(createdAt) ? createdAt * 1000 : 0;
-}
-
-function trimmed(value, length) {
-  const text = String(value || "").trim();
-  return text.length > length ? `${text.slice(0, Math.max(0, length - 1))}...` : text;
-}
-
-function dedupe(values) {
-  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value).replace(/`/g, "");
-}

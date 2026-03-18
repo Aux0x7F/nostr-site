@@ -4,7 +4,7 @@ This file describes the reusable component families that `nostr-site` should pro
 
 The goal is to make downstream sites extend stable primitives instead of re-solving the same interaction patterns page by page.
 
-Whole UI families should converge into reusable surface modules before they are copied into more page controllers.
+Whole UI families should converge into reusable surface modules before they are copied into more page controllers. Route-owned orchestration should move into `scripts/template/features`, and shared state/controllers should stay in `scripts/core`.
 
 ## Global shell
 
@@ -123,8 +123,16 @@ When a repeated pattern appears more than once, the next change should move it t
 
 Current extracted template surface families:
 
-- `scripts/core/navigation-state.js`
+- `scripts/core/request-signer.js`
+- `scripts/core/viewer-controller.js`
 - `scripts/core/notification-state.js`
+- `scripts/core/notification-builders.js`
+- `scripts/core/draft-review.js`
+- `scripts/template/features/site-runtime.js`
+- `scripts/template/features/content-pages.js`
+- `scripts/template/features/post-detail.js`
+- `scripts/template/features/map-page.js`
+- `scripts/core/navigation-state.js`
 - `scripts/template/surfaces/navigation.js`
 - `scripts/template/surfaces/archive.js`
 - `scripts/template/surfaces/comments.js`

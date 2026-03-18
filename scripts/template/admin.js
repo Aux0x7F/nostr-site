@@ -1,6 +1,11 @@
 import SITE from "../core/site-config.js";
 import { buildDraftMarkdown, createUniqueSlug, splitTags } from "../core/content-utils.js";
 import {
+  draftOwnerPubkey,
+  draftReviewAction,
+  draftStatusLabel as reviewStatusLabel
+} from "../core/draft-review.js";
+import {
   cleanSlug,
   decryptUploadedBlob,
   deriveIdentity,
@@ -22,7 +27,14 @@ import {
   uploadPublicBlob
 } from "../core/nostr.js";
 import { createPublicStateStore } from "../core/public-state-store.js";
+import { renderLoadingState } from "../core/rendering.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
+import {
+  dedupeStrings as dedupe,
+  escapeAttribute,
+  escapeHtml,
+  trimmed
+} from "../core/text-utils.js";
 import {
   renderChatModal as renderWorkspaceChatModal,
   renderEntityModal as renderWorkspaceEntityModal,
@@ -563,29 +575,6 @@ function renderReviewedCard(draft) {
       </div>
     </article>
   `;
-}
-
-function draftOwnerPubkey(draft) {
-  const revisions = Array.isArray(draft?.revisions) ? draft.revisions : [];
-  const oldest = revisions.length ? revisions[revisions.length - 1] : null;
-  return String(oldest?.author || draft?.author || "").trim().toLowerCase();
-}
-
-function draftReviewAction(draft) {
-  const tag = Array.isArray(draft?._event?.tags)
-    ? draft._event.tags.find((item) => Array.isArray(item) && item[0] === "review")
-    : null;
-  return String(tag?.[1] || "").trim().toLowerCase();
-}
-
-function reviewStatusLabel(status, reviewAction = "") {
-  const cleanStatus = String(status || "").trim().toLowerCase();
-  const cleanAction = String(reviewAction || "").trim().toLowerCase();
-  if (cleanStatus === "approved" || cleanAction === "approve") return "Approved";
-  if (cleanStatus === "denied" || cleanAction === "deny") return "Denied";
-  if (cleanStatus === "revision" || cleanAction === "revise") return "Revision requested";
-  if (["candidate", "submitted", "review"].includes(cleanStatus)) return "Submitted";
-  return "Draft";
 }
 
 function reviewedDraftHref(draft) {
@@ -1506,10 +1495,6 @@ async function loadStaticSlugs() {
   return (Array.isArray(data.files) ? data.files : []).map((file) => cleanSlug(String(file).replace(/\.md$/i, "")));
 }
 
-function dedupe(values) {
-  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
-}
-
 function siteKeyShareCacheKey(pubkey = workspaceState.viewer?.pubkey || "") {
   return `${SITE.nostr.storageNamespace}.admin-site-shares.${pubkey}`;
 }
@@ -1612,20 +1597,6 @@ function hydrateLookupCandidate(user) {
   };
 }
 
-function renderLoadingState(message) {
-  return `
-    <div class="loading-state loading-state--panel" role="status" aria-live="polite">
-      <span class="loading-spinner" aria-hidden="true"></span>
-      <span>${escapeHtml(message)}</span>
-    </div>
-  `;
-}
-
-function trimmed(value, length) {
-  const text = String(value || "").trim();
-  return text.length > length ? `${text.slice(0, length - 1)}...` : text;
-}
-
 function parseMaybeNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -1640,17 +1611,4 @@ function triggerBrowserDownload(file) {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value).replace(/`/g, "");
 }

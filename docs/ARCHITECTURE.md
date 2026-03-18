@@ -59,7 +59,7 @@ The reusable surface and compatibility expectations that should govern that work
 - `STYLE_GUIDE.md`
 - `BROWSER_SUPPORT.md`
 
-The concrete template and downstream sites should keep moving toward a `scripts/template/surfaces` or `scripts/surfaces` split, where whole UI families compose portable helpers instead of accumulating inside page controllers. The template now applies that directly for navigation, archive, comments, submit shell rendering, workspace rendering, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
+The concrete template and downstream sites should keep moving toward a `scripts/core -> scripts/template/features -> scripts/template/surfaces` split, where shared services live in core, route-owned logic lives in features, and UI families live in surfaces instead of accumulating inside page controllers. The template now applies that directly for site runtime/bootstrap, content pages, post detail, navigation, archive, comments, submit shell rendering, workspace rendering, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
 
 ## Cache-first live state contract
 
