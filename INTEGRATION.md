@@ -53,6 +53,12 @@ The same rule applies to non-CRDT public state:
 - reconcile in the background
 - patch in place instead of tearing surfaces down
 
+Template-facing expectations for the resulting surfaces belong in:
+
+- `COMPONENTS.md`
+- `STYLE_GUIDE.md`
+- `BROWSER_SUPPORT.md`
+
 ## Pinner contract
 
 Peer pinner should interact with collaborative units by:

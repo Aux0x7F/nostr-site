@@ -27,6 +27,7 @@ PRs should stay reviewable in one pass and should state:
 - what contract changed
 - what reusable layer changed
 - what validation was run
+- which framework docs were updated if a shared pattern, component family, fallback rule, or workflow expectation changed
 
 ## Merge policy
 

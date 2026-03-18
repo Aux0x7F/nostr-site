@@ -53,6 +53,12 @@ The target model is:
 
 This keeps first load fast and deterministic while still supporting live collaboration.
 
+The reusable surface and compatibility expectations that should govern that work now live in:
+
+- `COMPONENTS.md`
+- `STYLE_GUIDE.md`
+- `BROWSER_SUPPORT.md`
+
 ## Cache-first live state contract
 
 Every live surface in the framework must follow the same boot order:
