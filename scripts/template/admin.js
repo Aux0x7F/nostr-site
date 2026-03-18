@@ -9,7 +9,6 @@ import {
   loadAdminKeyShare,
   loadAdminKeyShares,
   loadInboxSubmissions,
-  loadPublicState,
   lookupUsers,
   loadSubmissionThread,
   normalizeUsername,
@@ -22,6 +21,7 @@ import {
   shortKey,
   uploadPublicBlob
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
 import {
   renderChatModal as renderWorkspaceChatModal,
@@ -32,6 +32,13 @@ import {
   renderUserCard as renderWorkspaceUserCard
 } from "./surfaces/workspace-actions.js";
 import { renderWorkspaceView } from "./surfaces/workspace.js";
+
+const workspacePublicStateStore = createPublicStateStore({
+  getSessionSecretKey: async () => workspaceState.session?.secretKeyHex || "",
+  page: "workspace",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
 
 const workspaceState = {
   session: getStoredSession(),
@@ -57,6 +64,11 @@ const workspaceState = {
   respondedKeyRequests: new Set(),
   keyRequestCache: null
 };
+
+workspaceState.publicState = workspacePublicStateStore.value;
+workspacePublicStateStore.subscribe((snapshot) => {
+  workspaceState.publicState = snapshot.value;
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.querySelector("[data-workspace-page]")) return;
@@ -269,12 +281,13 @@ async function hydrateWorkspaceState(force = false) {
     ? deriveIdentity(workspaceState.session.secretKeyHex)
     : null;
   const cachedShares = loadCachedSiteKeyShares();
-  const [publicState, remoteShares] = await Promise.all([
-    loadPublicState(force),
+  const [publicStateResult, remoteShares] = await Promise.all([
+    workspacePublicStateStore.hydrate({ force, reason: force ? "workspace-force" : "workspace-hydrate" }),
     workspaceState.session
       ? loadAdminKeyShares(workspaceState.session.secretKeyHex).catch(() => [])
       : Promise.resolve([])
   ]);
+  const publicState = publicStateResult.value;
   workspaceState.publicState = publicState;
   const activeSitePubkey = resolveSitePubkey(workspaceState.publicState);
   let mergedShares = mergeSiteKeyShares(remoteShares, cachedShares);

@@ -12,14 +12,11 @@ import {
   ensureBlobAvailable,
   loadAdminKeyShare,
   loadInboxSubmissions,
-  loadPublicState,
   loadSubmissionThread,
   loadUserSubmissions,
-  publicStateNeedsRepair,
   publishTaggedJson,
-  requestPublicStateRepair,
-  startPublicStateRepairPeer
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
 import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
@@ -51,14 +48,18 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric"
 });
 
+const publicStateStore = createPublicStateStore({
+  getSessionSecretKey: getRequestSignerSecretKey,
+  page: () => document.body.dataset.page || "site",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
+
 const state = {
   session: getStoredSession(),
   guestSession: getStoredGuestSession(),
   viewer: null,
-  publicState: null,
-  publicStateRepairPeerStarted: false,
-  publicStateRepairInFlight: false,
-  publicStateRepairRequestedAt: 0,
+  publicState: publicStateStore.value,
   postsPromise: null,
   commentReply: null,
   notifications: [],
@@ -69,6 +70,10 @@ const state = {
   markerIndex: null,
   pendingMapEntitySlug: ""
 };
+
+publicStateStore.subscribe((snapshot) => {
+  state.publicState = snapshot.value;
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   initExternalLinks();
@@ -180,28 +185,16 @@ async function bootstrapRelayState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
-    await ensurePublicStateRepairPeer();
-    state.publicState = await loadPublicState();
+    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "bootstrap" })).value;
     if (state.session) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
     }
   } catch {
-    state.publicState = null;
+    state.publicState = state.publicState || publicStateStore.value;
   }
   void publishVisitPulse();
-  void maybeRequestPublicStateRepair(state.publicState, "bootstrap");
   void hydrateNotifications();
   renderNavigation();
-}
-
-async function ensurePublicStateRepairPeer() {
-  if (state.publicStateRepairPeerStarted) return;
-  try {
-    await startPublicStateRepairPeer();
-    state.publicStateRepairPeerStarted = true;
-  } catch {
-    return;
-  }
 }
 
 function renderNavigation() {
@@ -537,7 +530,7 @@ async function renderComments(postSlug, publicState) {
         form.reset();
         state.commentReply = null;
         panel.innerHTML = renderLoadingState("Looking up discussion...");
-        state.publicState = await loadPublicState(true);
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-create" })).value;
         state.viewer = viewer;
         await renderComments(postSlug, state.publicState);
       } catch (error) {
@@ -584,7 +577,7 @@ async function renderComments(postSlug, publicState) {
             action: "hide"
           }
         });
-        state.publicState = await loadPublicState(true);
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "comment-hide" })).value;
         await renderComments(postSlug, state.publicState);
       } catch {
         return;
@@ -822,7 +815,7 @@ function bindReviewPreviewPanel(panel, draft) {
             review_action: action
           }
         });
-        state.publicState = await loadPublicState(true);
+        state.publicState = (await publicStateStore.hydrate({ force: true, reason: "review-action" })).value;
         state.notifications = [];
         void hydrateNotifications(true);
         if (statusBox instanceof HTMLElement) {
@@ -1143,12 +1136,10 @@ async function getPublicState() {
     if (!state.guestSession) {
       state.guestSession = await getOrCreateGuestSession().catch(() => null);
     }
-    await ensurePublicStateRepairPeer();
-    state.publicState = await loadPublicState();
+    state.publicState = (await publicStateStore.hydrate({ force: false, reason: "get-public-state" })).value;
     if (state.session && !state.viewer) {
       state.viewer = deriveIdentity(state.session.secretKeyHex);
     }
-    void maybeRequestPublicStateRepair(state.publicState, "get-public-state");
     if (state.session) {
       void hydrateNotifications();
     }
@@ -1164,32 +1155,6 @@ async function getPublicState() {
       admins: []
     };
     return state.publicState;
-  }
-}
-
-async function maybeRequestPublicStateRepair(publicState, reason = "") {
-  if (!publicStateNeedsRepair(publicState) || state.publicStateRepairInFlight) return;
-  const now = Date.now();
-  if (now - state.publicStateRepairRequestedAt < 45000) return;
-  let secretKeyHex = state.session?.secretKeyHex || state.guestSession?.secretKeyHex || "";
-  if (!secretKeyHex) {
-    await ensureEventToolsLoaded();
-    state.guestSession = await getOrCreateGuestSession().catch(() => null);
-    secretKeyHex = state.guestSession?.secretKeyHex || "";
-  }
-  if (!secretKeyHex) return;
-  state.publicStateRepairInFlight = true;
-  state.publicStateRepairRequestedAt = now;
-  try {
-    await requestPublicStateRepair(secretKeyHex, {
-      reason,
-      page: document.body.dataset.page || "site",
-      knownEventCount: Array.isArray(publicState?.rawEvents) ? publicState.rawEvents.length : 0
-    });
-  } catch {
-    return;
-  } finally {
-    state.publicStateRepairInFlight = false;
   }
 }
 

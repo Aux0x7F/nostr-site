@@ -4,16 +4,22 @@ import {
   cleanSlug,
   deriveIdentity,
   ensureEventToolsLoaded,
-  getCachedPublicState,
-  loadPublicState,
   publishTaggedJson
 } from "../core/nostr.js";
+import { createPublicStateStore } from "../core/public-state-store.js";
 import { getStoredSession } from "../core/session.js";
 import {
   renderEditorLoadingMarkup,
   renderEditorModalView,
   renderEditorShellView
 } from "./surfaces/editor-shell.js";
+
+const editorPublicStateStore = createPublicStateStore({
+  getSessionSecretKey: async () => editorState.session?.secretKeyHex || "",
+  page: "editor",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
 
 const editorState = {
   session: getStoredSession(),
@@ -35,6 +41,11 @@ const editorState = {
   documentClicksBound: false
 };
 
+editorState.publicState = editorPublicStateStore.value;
+editorPublicStateStore.subscribe((snapshot) => {
+  editorState.publicState = snapshot.value;
+});
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.querySelector("[data-editor-page]")) return;
   void initEditorPage();
@@ -51,14 +62,14 @@ async function initEditorPage(force = false) {
   }
   await ensureEventToolsLoaded();
   editorState.viewer = deriveIdentity(editorState.session.secretKeyHex);
-  const cachedPublicState = !force ? getCachedPublicState() : null;
+  const cachedPublicState = !force ? editorPublicStateStore.value : null;
   if (cachedPublicState && editorUserIsAdmin(cachedPublicState, editorState.viewer?.pubkey)) {
     editorState.publicState = cachedPublicState;
     renderEditorShell();
   } else {
     renderEditorLoading("Looking up editor...");
   }
-  editorState.publicState = await loadPublicState(force);
+  editorState.publicState = (await editorPublicStateStore.hydrate({ force, reason: "editor-load" })).value;
   editorState.staticSlugs = await loadStaticSlugs().catch(() => []);
   renderEditorShell();
 }

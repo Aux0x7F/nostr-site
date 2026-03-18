@@ -11,10 +11,11 @@
 - Branch-purpose-squash is now the documented contribution pattern.
 - Downstream validation has now proven the first broad extracted surface split for navigation, archive, comment, and workspace behavior.
 - The template now applies that same split directly in code through `scripts/template/surfaces`, including workspace actions, map shells, and editor-shell rendering.
+- The template now also shares one extracted public-state store boundary for public, workspace, and editor lifecycle instead of repeating repair and hydrate mechanics in each controller.
 
 ## Next Tightening Step
 
-- Finish the split between portable state logic and reusable surface primitives so notifications, profile-menu state, editor side rails, and remaining long-lived controller state stop living inside large page controllers.
+- Finish the remaining controller cleanup so notifications, profile-menu state, editor side rails, and repeated modal/action-sheet logic stop living inside large page controllers.
 
 That specifically means:
 
