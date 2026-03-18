@@ -15,21 +15,15 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - admin-requested seed bakedowns with optional GitHub PR sync via peer pinner
 - site-key rotation events with re-shared admin inbox access
 - lightweight browser smoke tests under `tooling/browser-smoke`
-- a repeatable production hardening checklist in `SECURITY_CHECKLIST.md`
+- a repeatable production hardening checklist in `docs/SECURITY_CHECKLIST.md`
 
 ## Structure
 
 - `blog.html` and `post.html`: generic blog index and detail pages
 - `content/blog/`: committed blog markdown and index manifest
 - `content/data/entities.json`: committed baked entity seed data
-- `ARCHITECTURE.md`: generic host-app contract and live-overlay model
-- `BROWSER_SUPPORT.md`: browser compatibility and progressive-enhancement contract
-- `COMPONENTS.md`: reusable component families and expectations
-- `CONTRIBUTING.md`: branch-purpose-squash workflow contract
-- `INTEGRATION.md`: how the framework should consume a generic CRDT transport
-- `ROADMAP.md`: current completion status and next tightening priorities
-- `STYLE_GUIDE.md`: reusable UI contract
-- `TESTING.md`: regression and validation contract
+- `docs/`: contract, security, and roadmap documents for the framework
+- `docs/README.md`: index of framework architecture, integration, component, testing, browser-support, and security contracts
 - `scripts/`: browser entrypoints and template implementation
 - `scripts/core/`: site config, session, content, and Nostr helpers
 - `scripts/template/surfaces/`: reusable template-level navigation, archive, comment, workspace, workspace-action, map, and editor-shell surface modules
@@ -52,10 +46,10 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 
 ## Operating model
 
-See `ARCHITECTURE.md` for the intended long-term split between generic transport, host-app trust policy, and site-specific implementation.
-See `COMPONENTS.md`, `STYLE_GUIDE.md`, and `BROWSER_SUPPORT.md` for the reusable surface and compatibility contracts.
+See `docs/ARCHITECTURE.md` for the current split between generic transport, host-app trust policy, and site-specific implementation.
+See `docs/COMPONENTS.md`, `docs/STYLE_GUIDE.md`, and `docs/BROWSER_SUPPORT.md` for the reusable surface and compatibility contracts.
 
-The intended workflow is:
+The framework workflow is:
 
 1. collaborative state lives on relays
 2. admins approve public drafts and entities in the live workspace
@@ -90,7 +84,7 @@ Current expectation:
 
 If you adopt this template for another site, treat the live relay layer as the working state and the committed markdown/JSON as the reviewed snapshot.
 
-The intended trust split is:
+The trust split is:
 
 - root admin authority stays with an actual admin key
 - the pinner only holds its own service signer
@@ -159,9 +153,9 @@ For actual deployments, the runtime repo can stay `nostr-site` while the pinner 
 
 ## Support library package
 
-See `support-lib/README.md`. This is the minified reusable browser layer intended for other sites to consume once the generic API is stable.
+See `support-lib/README.md`. This is the minified reusable browser layer that downstream sites consume once the generic API is stable.
 
-When you want another site to consume the generic layer, the current plan is:
+The downstream consumption path is:
 
 1. build `support-lib`
 2. publish or vendor the resulting `support-lib/dist/*`
@@ -172,7 +166,7 @@ The support library now also exports:
 - `createNostrCrdtBridge(config)` for low-level room, signer, and transport wiring
 - `createStaticPageOverlayApi(config)` for the first page-unit live overlay slice
 
-That is the path `truecost` should move onto once `nostr-site` is pushed and the generic bundle location is settled.
+`truecost` already follows that path by vendoring the built support bundle and layering site-specific config and surfaces around it.
 
 ## Browser smoke harness
 
@@ -180,7 +174,7 @@ That is the path `truecost` should move onto once `nostr-site` is pushed and the
 
 ## Production hardening
 
-Use `SECURITY_CHECKLIST.md` as the release gate. The short version is:
+Use `docs/SECURITY_CHECKLIST.md` as the release gate. The short version is:
 
 1. `npm run release:check`
 2. run the live browser smoke suite against the deployed site

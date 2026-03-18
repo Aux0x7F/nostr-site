@@ -4,7 +4,7 @@ This repo is the host-application layer that sits between a generic CRDT transpo
 
 ## Repo boundary
 
-The intended three-repo split is:
+The three-repo split is:
 
 - `nostr-crdt`
   - generic CRDT transport over Nostr
@@ -17,7 +17,7 @@ The intended three-repo split is:
 - `truecost`
   - project-specific pages, content, copy, styling, and operating choices
 
-`nostr-site` should consume a generic transport library. It should not become the transport library.
+`nostr-site` consumes a generic transport library. It does not become the transport library.
 
 ## Current state
 
@@ -42,7 +42,7 @@ Today, `nostr-site` does not yet provide:
 
 ## Target model
 
-The target model is:
+The framework model is:
 
 1. Static content is the baseline.
 2. Clients optionally connect to Nostr after load.
@@ -110,7 +110,7 @@ Manual browser checks are still useful, but they do not replace deterministic re
 
 The generic transport verifies event shape and Nostr signatures, but `nostr-site` decides whether a signer is allowed to affect visible state.
 
-The intended trust rule is:
+The trust rule is:
 
 - live content events are signed by the editor's own key
 - `nostr-site` reconstructs the current allowed admin set from its existing admin grant and revoke chain
@@ -133,7 +133,7 @@ It should not own application auth policy beyond enforcing the current trusted s
 
 ## Publishing contract
 
-For trusted live content, the long-term publishing model is:
+For trusted live content, the publishing model is:
 
 - editors change collaborative units live
 - clients receive and verify the live overlay
