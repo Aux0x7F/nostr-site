@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildCommentThreadState } from "../portable/comment-state.js";
-import { parsePublicCommentEvent } from "../portable/nostr-cms-core.js";
+import {
+  deserializePublicStateSnapshot,
+  parsePublicCommentEvent,
+  serializePublicStateSnapshot
+} from "../portable/nostr-cms-core.js";
 
 test("parsePublicCommentEvent uses the signed event id instead of the d tag", () => {
   const event = {
@@ -45,4 +49,35 @@ test("buildCommentThreadState keeps replies nested and does not promote orphans"
   assert.deepEqual(roots.map((comment) => comment.id), ["c-high", "c-low"]);
   assert.deepEqual((roots[1]?.replies || []).map((comment) => comment.id), ["r-1", "r-2"]);
   assert.deepEqual(orphans.map((comment) => comment.id), ["orphan"]);
+});
+
+test("public state snapshot round-trip preserves cached comment thread maps", () => {
+  const state = {
+    admins: ["a".repeat(64)],
+    users: [],
+    commentsByPost: new Map([["post", [{ id: "c1" }]]]),
+    commentThreadsByPost: new Map([[
+      "post",
+      [{
+        id: "c1",
+        replies: [{ id: "r1", replies: [] }]
+      }]
+    ]]),
+    commentIndex: new Map([
+      ["c1", { id: "c1" }],
+      ["r1", { id: "r1", parent_id: "c1" }]
+    ]),
+    commentVotes: new Map([
+      ["c1", { score: 3, byPubkey: new Map([["p1", 1]]) }]
+    ]),
+    rawEvents: [{ id: "raw-1" }]
+  };
+
+  const restored = deserializePublicStateSnapshot(serializePublicStateSnapshot(state));
+  assert.ok(restored.commentThreadsByPost instanceof Map);
+  assert.deepEqual((restored.commentThreadsByPost.get("post") || []).map((comment) => comment.id), ["c1"]);
+  assert.deepEqual((((restored.commentThreadsByPost.get("post") || [])[0] || {}).replies || []).map((comment) => comment.id), ["r1"]);
+  assert.equal(restored.rawEvents, undefined);
+  assert.equal(restored.commentVotes.get("c1").score, 3);
+  assert.equal(restored.commentVotes.get("c1").byPubkey.get("p1"), 1);
 });

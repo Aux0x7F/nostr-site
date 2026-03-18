@@ -53,6 +53,25 @@ The target model is:
 
 This keeps first load fast and deterministic while still supporting live collaboration.
 
+## Cache-first live state contract
+
+Every live surface in the framework must follow the same boot order:
+
+1. render static baseline if available
+2. render cached live state immediately if a trustworthy cache exists
+3. reconcile against relays in the background
+4. patch the mounted surface in place
+
+Live surfaces must not blank useful cached content just because a network refresh is in flight.
+
+This applies to:
+
+- archive views
+- comment threads
+- map/entity views
+- workspace lists
+- collaborative document overlays
+
 ## Collaborative units
 
 The host framework should think in terms of one collaborative unit per document:
@@ -64,6 +83,18 @@ The host framework should think in terms of one collaborative unit per document:
 The framework should not encourage one giant site-wide document.
 
 The framework also should not force a specific CRDT engine into all state. Only the units that benefit from live collaboration should use the transport layer.
+
+## Testing contract
+
+New live-state features are not complete without regression coverage for:
+
+- cached-first render
+- optimistic local update behavior
+- reload resilience
+- stale remote merge behavior
+- nested structure integrity where threading or hierarchy exists
+
+Manual browser checks are still useful, but they do not replace deterministic regression tests for these cases.
 
 ## Trust boundary
 

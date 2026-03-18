@@ -47,6 +47,12 @@ The transport library should not embed those rules.
 
 That means collaborative state should enhance or replace the corresponding unit after static load, not replace the whole site boot model.
 
+The same rule applies to non-CRDT public state:
+
+- use cached public state first when available
+- reconcile in the background
+- patch in place instead of tearing surfaces down
+
 ## Pinner contract
 
 Peer pinner should interact with collaborative units by:
@@ -127,3 +133,12 @@ Its job is:
 - let other browsers rebroadcast cached original events
 - only merge or rebroadcast locally verified signed events
 - preserve verifiability by replaying the original events instead of inventing a second state source
+
+## Regression expectations
+
+Framework changes that affect live state or cached state must come with focused tests for:
+
+- cache-first restore
+- optimistic update persistence across background refresh
+- identifier stability across publish, reload, and replay
+- hierarchical integrity for threaded or nested data

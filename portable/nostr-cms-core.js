@@ -32,6 +32,68 @@ function toCommentUnix(value) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
+function stripTransientPublicStateFields(value, key = "") {
+  if (key === "rawEvents" || key === "_event" || key === "event") return undefined;
+  if (value instanceof Map) {
+    return new Map(
+      [...value.entries()]
+        .map(([entryKey, entryValue]) => [entryKey, stripTransientPublicStateFields(entryValue)])
+        .filter(([, entryValue]) => entryValue !== undefined)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripTransientPublicStateFields(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (value && typeof value === "object") {
+    const next = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+      const stripped = stripTransientPublicStateFields(entryValue, entryKey);
+      if (stripped !== undefined) next[entryKey] = stripped;
+    }
+    return next;
+  }
+  return value;
+}
+
+function snapshotSerializeValue(value) {
+  if (value instanceof Map) {
+    return {
+      __nostrSiteType: "Map",
+      entries: [...value.entries()].map(([key, entryValue]) => [
+        snapshotSerializeValue(key),
+        snapshotSerializeValue(entryValue)
+      ])
+    };
+  }
+  if (Array.isArray(value)) return value.map((entry) => snapshotSerializeValue(entry));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, snapshotSerializeValue(entryValue)])
+    );
+  }
+  return value;
+}
+
+function snapshotDeserializeValue(value) {
+  if (Array.isArray(value)) return value.map((entry) => snapshotDeserializeValue(entry));
+  if (value && typeof value === "object") {
+    if (value.__nostrSiteType === "Map") {
+      return new Map(
+        (Array.isArray(value.entries) ? value.entries : []).map(([key, entryValue]) => [
+          snapshotDeserializeValue(key),
+          snapshotDeserializeValue(entryValue)
+        ])
+      );
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, snapshotDeserializeValue(entryValue)])
+    );
+  }
+  return value;
+}
+
 export function parsePublicCommentEvent(event) {
   const payload = parseCommentObject(event?.content);
   const postSlug = cleanCommentSlug(payload?.post_slug || firstCommentTag(event, "a"));
@@ -51,6 +113,19 @@ export function parsePublicCommentEvent(event) {
     id_event: eventId,
     _event: event
   };
+}
+
+export function serializePublicStateSnapshot(publicState) {
+  return JSON.stringify(snapshotSerializeValue(stripTransientPublicStateFields(publicState)));
+}
+
+export function deserializePublicStateSnapshot(raw) {
+  if (!raw) return null;
+  try {
+    return snapshotDeserializeValue(JSON.parse(String(raw)));
+  } catch {
+    return null;
+  }
 }
 
 export function createNostrCmsClient(config) {
@@ -250,9 +325,20 @@ async function loadPublicState(force = false) {
 }
 
 function getCachedPublicState() {
+  const cachedSnapshot = loadCachedPublicStateSnapshot();
+  if (cachedSnapshot) {
+    return withPublicStateSyncInfo(cachedSnapshot, {
+      connected: false,
+      error: "Showing cached public state.",
+      remoteEventCount: 0,
+      cachedEventCount: Array.isArray(cachedSnapshot?.rawEvents) ? cachedSnapshot.rawEvents.length : 0,
+      mergedEventCount: Array.isArray(cachedSnapshot?.rawEvents) ? cachedSnapshot.rawEvents.length : 0
+    });
+  }
   const cachedEvents = loadCachedPublicEvents();
   if (!cachedEvents.length) return null;
   const publicState = buildPublicState(cachedEvents, []);
+  persistCachedPublicStateSnapshot(publicState);
   return withPublicStateSyncInfo(publicState, {
     connected: false,
     error: "Showing cached public state.",
@@ -858,6 +944,7 @@ async function fetchPublicState() {
     const mergedEvents = mergeCachedEvents(remoteEvents, cachedEvents);
     persistCachedPublicEvents(mergedEvents);
     const publicState = buildPublicState(mergedEvents, seedEntities);
+    persistCachedPublicStateSnapshot(publicState);
     return withPublicStateSyncInfo(publicState, {
       connected: remoteEvents.length > 0,
       error: remoteEvents.length ? "" : cachedEvents.length ? "Live relay data incomplete. Showing cached public state." : "",
@@ -868,6 +955,7 @@ async function fetchPublicState() {
   } catch (error) {
     if (cachedEvents.length) {
       const publicState = buildPublicState(cachedEvents, seedEntities);
+      persistCachedPublicStateSnapshot(publicState);
       return withPublicStateSyncInfo(publicState, {
         connected: false,
         error: String(error?.message || error || "Relay timeout."),
@@ -1692,6 +1780,23 @@ function loadCachedPublicEvents() {
   }
 }
 
+function loadCachedPublicStateSnapshot() {
+  try {
+    return deserializePublicStateSnapshot(window.localStorage.getItem(publicStateSnapshotKey()));
+  } catch {
+    return null;
+  }
+}
+
+function persistCachedPublicStateSnapshot(publicState) {
+  try {
+    if (!publicState || typeof publicState !== "object") return;
+    window.localStorage.setItem(publicStateSnapshotKey(), serializePublicStateSnapshot(publicState));
+  } catch {
+    return;
+  }
+}
+
 function persistCachedPublicEvents(events) {
   try {
     const normalized = mergeCachedEvents(events, []);
@@ -1734,6 +1839,10 @@ function normalizeCachedPublicEvent(event) {
 
 function publicEventCacheKey() {
   return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-event-cache`;
+}
+
+function publicStateSnapshotKey() {
+  return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-state-snapshot`;
 }
 
 function publicEventCacheLimit() {
