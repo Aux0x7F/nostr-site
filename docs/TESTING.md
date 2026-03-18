@@ -7,6 +7,7 @@
 Any change that affects live state, cached state, or public rendering should have:
 
 - a deterministic unit test for the data contract
+- a focused feature/runtime test when route-owned logic moves out of a root controller
 - a focused surface test when a render family moves out of a page controller
 - a syntax/build pass
 - a note about which surface behavior was validated
@@ -39,6 +40,7 @@ See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback ex
 - `node --test test/shell-surfaces.test.mjs`
 - `node --test test/public-state-store.test.mjs`
 - `node --test test/navigation-notification.test.mjs`
+- `node --test test/public-state-store.test.mjs`
 - `node --test test/workspace-actions.test.mjs`
 - `node --test test/workspace-filters.test.mjs`
 - `node --test test/editor-shell.test.mjs`
