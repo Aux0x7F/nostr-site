@@ -59,7 +59,7 @@ The reusable surface and compatibility expectations that should govern that work
 - `STYLE_GUIDE.md`
 - `BROWSER_SUPPORT.md`
 
-The concrete template and downstream sites should keep moving toward a `scripts/template/surfaces` or `scripts/surfaces` split, where whole UI families compose portable helpers instead of accumulating inside page controllers.
+The concrete template and downstream sites should keep moving toward a `scripts/template/surfaces` or `scripts/surfaces` split, where whole UI families compose portable helpers instead of accumulating inside page controllers. The template now applies that directly for navigation, archive, comments, and workspace rendering.
 
 ## Cache-first live state contract
 

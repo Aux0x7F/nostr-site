@@ -119,3 +119,10 @@ When a repeated pattern appears more than once, the next change should move it t
 - a portable helper
 - a shared template primitive
 - or a documented contract here before another divergent copy lands
+
+Current extracted template surface families:
+
+- `scripts/template/surfaces/navigation.js`
+- `scripts/template/surfaces/archive.js`
+- `scripts/template/surfaces/comments.js`
+- `scripts/template/surfaces/workspace.js`

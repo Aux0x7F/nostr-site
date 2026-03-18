@@ -23,6 +23,7 @@ import {
   uploadPublicBlob
 } from "../core/nostr.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
+import { renderWorkspaceView } from "./surfaces/workspace.js";
 
 const workspaceState = {
   session: getStoredSession(),
@@ -383,45 +384,59 @@ function renderWorkspace(options = {}) {
   const title = document.querySelector("[data-workspace-title]");
   const lede = document.querySelector("[data-workspace-lede]");
   if (!shell || !title || !lede) return;
-
-  if (!workspaceState.session) {
-    title.textContent = "Log in";
-    lede.textContent = "Use the same username and password each time to return to this account.";
-    shell.innerHTML = renderLoginPane();
-    return;
-  }
-
-  const admin = currentUserIsAdmin();
-  title.textContent = admin ? "Workspace" : "Profile options";
-  lede.textContent = admin
-    ? "Manage users, submissions, entities, and post review."
-    : "Update your profile and review your comments.";
-
-  const tabsMarkup = tabButtons().map((tab) => renderTabButton(tab)).join("");
-  const paneMarkup = renderActivePane();
-  const overlayMarkup = `${renderEntityModal()}${renderChatModal()}`;
+  const surfaceDeps = workspaceSurfaceDeps();
+  const view = renderWorkspaceView({
+    workspaceState,
+    deps: surfaceDeps
+  });
+  title.textContent = view.title;
+  lede.textContent = view.lede;
   const tabs = shell.querySelector("[data-workspace-tabs]");
   const pane = shell.querySelector("[data-workspace-pane]");
   const overlays = shell.querySelector("[data-workspace-overlays]");
 
   if (soft && tabs && pane && overlays) {
-    tabs.innerHTML = tabsMarkup;
-    pane.innerHTML = paneMarkup;
-    overlays.innerHTML = overlayMarkup;
+    tabs.innerHTML = view.tabsMarkup;
+    pane.innerHTML = view.paneMarkup;
+    overlays.innerHTML = view.overlayMarkup;
   } else {
     shell.innerHTML = `
       <div class="workspace-tabs" data-workspace-tabs>
-        ${tabsMarkup}
+        ${view.tabsMarkup}
       </div>
       <div class="workspace-pane" data-workspace-pane>
-        ${paneMarkup}
+        ${view.paneMarkup}
       </div>
       <div data-workspace-overlays>
-        ${overlayMarkup}
+        ${view.overlayMarkup}
       </div>
     `;
   }
   hydrateWorkspaceEnhancements();
+}
+
+function workspaceSurfaceDeps() {
+  return {
+    tabButtons,
+    renderTabButton,
+    currentUserIsAdmin,
+    currentUserHasInboxAccess,
+    currentUserPendingKeyRequest,
+    currentUser,
+    escapeHtml,
+    escapeAttribute,
+    renderSnapshotSummary,
+    renderLookupCandidate,
+    renderUserCard,
+    renderSubmissionCard,
+    renderReviewCard,
+    renderReviewedCard,
+    renderModerationComment,
+    renderEntityModal,
+    renderChatModal,
+    renderLogPane,
+    trimmed
+  };
 }
 
 function renderLoginPane() {

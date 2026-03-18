@@ -23,6 +23,7 @@ import {
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
 import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
+import { renderNavigationMarkup, profileInitials } from "./surfaces/navigation.js";
 
 const NAV_KEYS = {
   home: ["home"],
@@ -207,102 +208,27 @@ function renderNavigation() {
       state.publicState?.admins?.includes(state.viewer.pubkey)
   );
   const notifications = isLoggedIn ? state.notifications.slice(0, 8) : [];
-  const unreadCount = isLoggedIn ? countUnreadNotifications(notifications) : 0;
   const mapEnabled = Boolean(state.publicState?.connected || state.publicState?.approvedEntities?.length);
-  const mapCurrent = NAV_KEYS.map.includes(page);
-  const profileMarkup = isLoggedIn
-    ? `
-      <div class="profile-menu ${NAV_KEYS.workspace.includes(page) ? "is-current" : ""}" data-profile-menu>
-        <button class="profile-menu__toggle ${currentUser?.avatarUrl ? "has-avatar" : ""}" type="button" data-profile-toggle aria-label="Profile options">
-          <span class="profile-menu__badge ${currentUser?.avatarUrl ? "has-avatar" : ""}">${profileBadgeMarkup(currentUser)}</span>
-          ${unreadCount ? `<span class="profile-menu__notice">${Math.min(unreadCount, 9)}${unreadCount > 9 ? "+" : ""}</span>` : ""}
-        </button>
-        <div class="profile-menu__panel">
-          ${
-            state.notificationsLoading
-              ? `<div class="profile-menu__section"><div class="loading-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Looking up notifications...</span></div></div>`
-              : notifications.length
-                ? `
-                  <div class="profile-menu__section">
-                    <div class="profile-menu__section-title">Notifications</div>
-                    <div class="profile-menu__notifications">
-                      ${notifications.map((item) => renderNotificationItem(item)).join("")}
-                    </div>
-                  </div>
-                `
-                : ""
-          }
-          <a href="./admin.html?tab=profile">Profile</a>
-          ${isAdmin ? `<a href="./admin.html?tab=dashboard">Admin</a>` : ""}
-          <button type="button" data-signout>Sign out</button>
-        </div>
-      </div>
-    `
-    : `<a class="profile-cta" href="./admin.html?tab=login" aria-label="Create or log in">Create/Login</a>`;
-
-  nav.innerHTML = `
-    <a class="${navLinkClass(page, "home")}" href="./index.html">Home</a>
-    ${
-      isAdmin
-        ? `
-          <div class="nav-group ${NAV_KEYS.blog.includes(page) ? "is-current" : ""}" data-nav-group>
-            <button class="nav-group__toggle" type="button" data-submenu-toggle>
-              Blog
-            </button>
-            <div class="nav-group__panel">
-              <a class="${navLinkClass(page, "blog")}" href="./blog.html">View Blog</a>
-              <a href="./editor.html">Create Post</a>
-            </div>
-          </div>
-        `
-        : `<a class="${navLinkClass(page, "blog")}" href="./blog.html">Blog</a>`
+  nav.innerHTML = renderNavigationMarkup({
+    page,
+    navKeys: NAV_KEYS,
+    isLoggedIn,
+    isAdmin,
+    currentUser,
+    sessionUsername: state.session?.username || "",
+    notifications,
+    notificationsLoading: state.notificationsLoading,
+    mapEnabled,
+    deps: {
+      countUnreadNotifications,
+      escapeAttribute,
+      escapeHtml
     }
-    <a class="${navLinkClass(page, "map", !mapEnabled && !mapCurrent)}" href="./map.html" ${!mapEnabled && !mapCurrent ? 'aria-disabled="true"' : ""}>Map</a>
-    <div class="nav-group ${NAV_KEYS["get-involved"].includes(page) ? "is-current" : ""}" data-nav-group>
-      <button class="nav-group__toggle" type="button" data-submenu-toggle>
-        Get Involved
-      </button>
-      <div class="nav-group__panel">
-        <a class="${navLinkClass(page, "get-involved")}" href="./get-involved.html">Get Involved</a>
-        <a class="${navLinkClass(page, "guide")}" href="./guide.html">Guide</a>
-        <a class="${navLinkClass(page, "submit")}" href="./submit.html">Submit</a>
-      </div>
-    </div>
-    <a class="${navLinkClass(page, "about")}" href="./about.html">About</a>
-    <a class="${navLinkClass(page, "merch")}" href="./merch.html">Merch</a>
-    ${profileMarkup}
-  `;
+  });
 
   for (const disabled of nav.querySelectorAll('[aria-disabled="true"]')) {
     disabled.addEventListener("click", (event) => event.preventDefault(), { once: false });
   }
-}
-
-function profileBadgeMarkup(user) {
-  if (user?.avatarUrl) {
-    const label = user.displayName || user.username || "Profile";
-    const blob = user.avatarBlob;
-    const blobAttrs = blob?.sha256
-      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || user.avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
-      : "";
-    return `<img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}>`;
-  }
-  if (!state.session?.username) return "Create/Login";
-  return escapeHtml(profileInitials(user?.displayName || state.session.username));
-}
-
-function profileInitials(value) {
-  const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "Me";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
-}
-
-function navLinkClass(page, key, disabled = false) {
-  const parts = ["nav-link"];
-  if (NAV_KEYS[key]?.includes(page)) parts.push("is-current");
-  if (disabled) parts.push("is-disabled");
-  return parts.join(" ");
 }
 
 function initExternalLinks() {
@@ -1124,16 +1050,6 @@ function markNotificationsSeen() {
 
 function countUnreadNotifications(notifications) {
   return (Array.isArray(notifications) ? notifications : []).filter((item) => item.unread).length;
-}
-
-function renderNotificationItem(item) {
-  return `
-    <a class="profile-menu__notice-item" href="${escapeAttribute(item.href)}">
-      <span class="profile-menu__notice-label">${escapeHtml(item.label)}</span>
-      <strong>${escapeHtml(item.title)}</strong>
-      <span>${escapeHtml(item.detail || "")}</span>
-    </a>
-  `;
 }
 
 function reviewNotificationTitle(action) {

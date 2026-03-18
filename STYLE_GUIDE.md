@@ -26,6 +26,13 @@ Whole UI families that compose those primitives should live in `scripts/template
 
 These are the first tools to extend before adding new one-off patterns.
 
+Current extracted surface families:
+
+- `navigation`
+- `archive`
+- `comments`
+- `workspace`
+
 ## Layout Rules
 - Main content column leads; rails support it.
 - Sticky rails align to the top of the content they support.

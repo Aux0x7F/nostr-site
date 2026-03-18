@@ -7,6 +7,7 @@
 Any change that affects live state, cached state, or public rendering should have:
 
 - a deterministic unit test for the data contract
+- a focused surface test when a render family moves out of a page controller
 - a syntax/build pass
 - a note about which surface behavior was validated
 - a compatibility note when introducing non-baseline browser features
@@ -35,6 +36,7 @@ See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback ex
 
 - `npm run test:unit`
 - `node --test test/archive-surface.test.mjs`
+- `node --test test/shell-surfaces.test.mjs`
 - `npm run build`
 - `npm run build:support-lib`
 - `npm run smoke:browser`
