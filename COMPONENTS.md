@@ -83,10 +83,25 @@ This applies to:
 - workspace lists
 - collaborative overlays
 
+## Workspace and menu surfaces
+
+### Workspace lists and rails
+
+- template workspace panes should converge on shared list and rail behavior before downstream sites customize them
+- rails own search, stats, and filters when they drive the list
+- refresh should patch rows and counts in place instead of replacing the whole pane
+
+### Notifications and profile menu
+
+- notification state lives inside the profile menu surface
+- the badge is the compact state; the expanded list is a child state of the same menu
+- consuming notifications should not collapse unrelated controls
+
 ## Modals and action sheets
 
 - focused actions should happen in context through modals or inline action sheets
 - they should not replace the entire page for small tasks
+- repeated item-action patterns should converge into one action-sheet family before a new list invents another variation
 
 ## Editor shell
 

@@ -21,6 +21,8 @@ import {
   startPublicStateRepairPeer
 } from "../core/nostr.js";
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
+import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
+import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
 
 const NAV_KEYS = {
   home: ["home"],
@@ -327,12 +329,17 @@ async function initBlogCards() {
       homeGrid.innerHTML = posts
         .filter((post) => post.featured)
         .slice(0, count)
-        .map((post) => renderPostCard(post, true))
+        .map((post) => renderPostCard(post, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
         .join("");
     }
     if (listGrid) {
       const entries = canEdit
-        ? buildBlogArchiveEntries(posts, publicState.drafts || [])
+        ? buildBlogArchiveEntries(posts, publicState.drafts || [], {
+            draftReviewAction,
+            draftStatusLabel,
+            normalizeDraftStatus,
+            sortDateValue
+          })
         : posts.map((post) => ({
             ...post,
             archiveStatus: "posted",
@@ -342,7 +349,7 @@ async function initBlogCards() {
           }));
       listGrid.innerHTML = `
         ${canEdit ? renderAuthoringLeadCard() : ""}
-        ${entries.map((post) => renderPostCard(post, false)).join("")}
+        ${entries.map((post) => renderPostCard(post, false, { escapeAttribute, escapeHtml, formatDate, renderTagList })).join("")}
       `;
     }
   } catch {
@@ -405,7 +412,7 @@ async function initPostDetail() {
         : posts
             .filter((item) => item.slug !== post.slug)
             .slice(0, 2)
-            .map((item) => renderPostCard(item, true))
+            .map((item) => renderPostCard(item, true, { escapeAttribute, escapeHtml, formatDate, renderTagList }))
             .join("");
     }
 
@@ -539,7 +546,17 @@ async function renderComments(postSlug, publicState) {
     }
     ${
       threadedComments.length
-        ? `<div class="comment-list">${threadedComments.map((comment) => renderComment(comment, publicState, { isAdmin, canReply: isLoggedIn })).join("")}</div>`
+        ? `<div class="comment-list">${threadedComments
+            .map((comment) =>
+              renderComment(comment, publicState, { isAdmin, canReply: isLoggedIn }, {
+                escapeAttribute,
+                escapeHtml,
+                formatDateTime,
+                renderAvatarBadge,
+                renderMiniMarkdown
+              })
+            )
+            .join("")}</div>`
         : isLoggedIn
           ? `<div class="comment-list"><div class="empty-state">No comments yet. Start the discussion.</div></div>`
           : ""
@@ -642,46 +659,11 @@ async function renderComments(postSlug, publicState) {
   }
 }
 
-function renderComment(comment, publicState, options = {}, depth = 0) {
-  const author = publicState.users.find((user) => user.pubkey === comment.author);
-  const authorLabel = author?.displayName || author?.username || "User";
-  const replies = Array.isArray(comment.replies) ? comment.replies : [];
-  return `
-    <article class="comment-card ${depth ? "comment-card--reply" : ""}" id="comment-${escapeAttribute(comment.id)}" data-comment-id="${escapeAttribute(comment.id)}">
-      <div class="comment-card__shell">
-        ${renderAvatarBadge(author, authorLabel, "comment-card__avatar")}
-        <div class="comment-card__main">
-          <div class="comment-card__meta">
-            <div>
-              <strong>${escapeHtml(authorLabel)}</strong>
-              <span>${formatDateTime(comment.created_at)}</span>
-            </div>
-          </div>
-          <div class="comment-card__body">${renderMiniMarkdown(comment.markdown)}</div>
-          <div class="comment-card__actions">
-            ${options.canReply ? `<button type="button" class="button-ghost" data-reply-comment="${escapeAttribute(comment.id)}">Reply</button>` : ""}
-            ${options.isAdmin ? `<button type="button" class="button-ghost" data-hide-comment="${escapeAttribute(comment.id)}">Hide</button>` : ""}
-          </div>
-          ${
-            replies.length
-              ? `<div class="comment-card__children">${replies.map((reply) => renderComment(reply, publicState, options, depth + 1)).join("")}</div>`
-              : ""
-          }
-        </div>
-      </div>
-    </article>
-  `;
-}
-
 function countRenderedCommentNodes(nodes) {
   return (Array.isArray(nodes) ? nodes : []).reduce(
     (total, node) => total + 1 + countRenderedCommentNodes(node?.replies || []),
     0
   );
-}
-
-function renderCommentCountLabel(count) {
-  return `${count} visible comment${count === 1 ? "" : "s"}`;
 }
 
 function commentAuthorLabel(comment, publicState) {
@@ -699,98 +681,6 @@ function renderAvatarBadge(user, fallbackLabel, className) {
     return `<span class="${className} ${className}--image"><img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}></span>`;
   }
   return `<span class="${className}">${escapeHtml(profileInitials(label))}</span>`;
-}
-
-function renderPostCard(post, compact) {
-  const href = post.href || `./post.html?slug=${encodeURIComponent(post.slug)}`;
-  const eyebrow = post.eyebrow || "Blog post";
-  const actionLabel = post.actionLabel || "Open post";
-  const statusPill = post.statusLabel
-    ? `<span class="status-pill status-pill--${escapeAttribute(post.archiveStatus || "posted")}">${escapeHtml(post.statusLabel)}</span>`
-    : "";
-  if (!compact) {
-    return `
-      <article class="post-card post-card--list ${post.cardClass || ""}">
-        <div class="post-card__body">
-          <div class="post-card__head">
-            <div class="eyebrow">${escapeHtml(eyebrow)}</div>
-            ${statusPill}
-          </div>
-          <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
-          <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
-          <p class="card-summary">${escapeHtml(post.summary)}</p>
-          <div class="tag-row">${renderTagList((post.tags || []).slice(0, 4))}</div>
-        </div>
-        <div class="post-card__rail">
-          <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
-        </div>
-      </article>
-    `;
-  }
-  return `
-    <article class="post-card ${compact ? "post-card--compact" : ""}">
-      <div class="post-card__head">
-        <div class="eyebrow">${escapeHtml(eyebrow)}</div>
-        ${statusPill}
-      </div>
-      <h3><a href="${href}">${escapeHtml(post.title)}</a></h3>
-      <p class="card-meta">${escapeHtml(post.location)} <span>${escapeHtml(formatDate(post.date))}</span></p>
-      <p>${escapeHtml(post.summary)}</p>
-      <div class="tag-row">${renderTagList((post.tags || []).slice(0, compact ? 2 : 4))}</div>
-      <a class="text-link" href="${href}">${escapeHtml(actionLabel)}</a>
-    </article>
-  `;
-}
-
-function buildBlogArchiveEntries(posts, drafts) {
-  const staticSlugs = new Set((Array.isArray(posts) ? posts : []).map((post) => post.slug));
-  const published = (Array.isArray(posts) ? posts : []).map((post) => ({
-    ...post,
-    archiveStatus: "posted",
-    statusLabel: "Posted",
-    href: `./post.html?slug=${encodeURIComponent(post.slug)}`,
-    actionLabel: "Open post"
-  }));
-  const relayEntries = (Array.isArray(drafts) ? drafts : [])
-    .filter((draft) => !(staticSlugs.has(draft.slug) && normalizeDraftStatus(draft.status) === "approved"))
-    .map((draft) => {
-      const status = normalizeDraftStatus(draft.status);
-      const reviewAction = draftReviewAction(draft);
-      const archived = status === "approved" ? "approved" : status;
-      const isEditable = status === "draft" || status === "revision";
-      const href = isEditable
-        ? `./editor.html?slug=${encodeURIComponent(draft.slug)}`
-        : `./post.html?draft=${encodeURIComponent(draft.slug)}`;
-      return {
-        ...draft,
-        body: draft.markdown || "",
-        archiveStatus: archived,
-        statusLabel: draftStatusLabel(status, reviewAction),
-        href,
-        actionLabel: isEditable ? "Continue writing" : "Open preview",
-        location: draft.location || "Draft location pending",
-        summary: draft.summary || "This post does not have a summary yet.",
-        eyebrow: "Blog post"
-      };
-    });
-  return [...relayEntries, ...published]
-    .sort((left, right) => {
-      const leftStamp = sortDateValue(left);
-      const rightStamp = sortDateValue(right);
-      if (leftStamp !== rightStamp) return rightStamp - leftStamp;
-      return String(left.title || "").localeCompare(String(right.title || ""));
-    });
-}
-
-function renderAuthoringLeadCard() {
-  return `
-    <article class="surface-panel authoring-card">
-      <div class="eyebrow">For editors</div>
-      <h3>Write in the full editor</h3>
-      <p>Drafts save as you work, submitted posts open in review preview, and approved posts roll into the next bakedown.</p>
-      <div class="button-row"><a class="button" href="./editor.html">Create post</a></div>
-    </article>
-  `;
 }
 
 function normalizeDraftStatus(status) {

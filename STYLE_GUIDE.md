@@ -22,6 +22,8 @@ See [COMPONENTS.md](./COMPONENTS.md) for the reusable component families that sh
 - modal cards for focused tasks
 - sticky side rails that scroll internally when needed
 
+Whole UI families that compose those primitives should live in `scripts/template/surfaces` before they are copied into more page controllers.
+
 These are the first tools to extend before adding new one-off patterns.
 
 ## Layout Rules

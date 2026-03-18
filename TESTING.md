@@ -34,6 +34,9 @@ See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback ex
 ## Current commands
 
 - `npm run test:unit`
+- `node --test test/archive-surface.test.mjs`
 - `npm run build`
 - `npm run build:support-lib`
 - `npm run smoke:browser`
+
+`npm run test:unit` should remain the umbrella command for all `test/*.test.mjs` unit coverage.
