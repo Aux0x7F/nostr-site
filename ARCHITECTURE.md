@@ -59,6 +59,8 @@ The reusable surface and compatibility expectations that should govern that work
 - `STYLE_GUIDE.md`
 - `BROWSER_SUPPORT.md`
 
+The concrete template and downstream sites should keep moving toward a `scripts/surfaces` split, where whole UI families compose portable helpers instead of accumulating inside page controllers.
+
 ## Cache-first live state contract
 
 Every live surface in the framework must follow the same boot order:

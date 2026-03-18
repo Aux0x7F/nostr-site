@@ -9,6 +9,7 @@
 - Static-page and structured-unit live overlay helpers are in place.
 - Browser-compatibility fallback rules are now documented for the template layer.
 - Branch-purpose-squash is now the documented contribution pattern.
+- Downstream validation has now proven the first extracted surface split for archive and comment behavior.
 
 ## Next Tightening Step
 
@@ -17,9 +18,9 @@
 That specifically means:
 
 - reusable rail/filter helpers
-- reusable thread rendering helpers
 - reusable modal/action-sheet patterns
 - reusable list/card families
+- map shells and preview helpers that are still page-controller responsibilities
 - clearer browser-compat fallback coverage for those shared primitives
 
 ## Near Term

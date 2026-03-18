@@ -4,6 +4,8 @@ This file describes the reusable component families that `nostr-site` should pro
 
 The goal is to make downstream sites extend stable primitives instead of re-solving the same interaction patterns page by page.
 
+Whole UI families should converge into reusable surface modules before they are copied into more page controllers.
+
 ## Global shell
 
 ### Header and navigation
