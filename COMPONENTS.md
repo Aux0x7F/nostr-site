@@ -41,6 +41,7 @@ Whole UI families should converge into reusable surface modules before they are 
 ### Attached field pattern
 
 - attached suggestions and dropdowns open from the field itself
+- submit-modal entity and location fields are part of this same attached field pattern
 - they overlay what sits below instead of pushing the layout
 - they support:
   - `ArrowUp`

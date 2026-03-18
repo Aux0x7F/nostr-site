@@ -41,6 +41,7 @@ Current extracted surface families:
 
 ## Interaction Rules
 - Attached dropdowns open from the field and overlay what sits below them.
+- Submit-modal entity and location fields should use the same attached dropdown pattern instead of bespoke form widgets.
 - Search fields clear both their value and their active filter state.
 - Keyboard support is expected for all pseudo-dropdowns.
 - Loading indicators should live inside the component that is loading.
