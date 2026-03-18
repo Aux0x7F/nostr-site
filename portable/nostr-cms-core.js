@@ -1,5 +1,58 @@
 import { buildCommentThreadState } from "./comment-state.js";
 
+function parseCommentObject(content) {
+  try {
+    const parsed = JSON.parse(String(content || ""));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanCommentSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeCommentPubkey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function firstCommentTag(event, key) {
+  const tag = (event?.tags || []).find((item) => Array.isArray(item) && item[0] === key);
+  return tag ? String(tag[1] || "") : "";
+}
+
+function toCommentUnix(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+export function parsePublicCommentEvent(event) {
+  const payload = parseCommentObject(event?.content);
+  const postSlug = cleanCommentSlug(payload?.post_slug || firstCommentTag(event, "a"));
+  if (!postSlug) return null;
+  const parentId = String(payload?.parent_id || firstCommentTag(event, "parent") || firstCommentTag(event, "e") || "").trim();
+  const rootId = String(payload?.root_id || firstCommentTag(event, "root") || "").trim();
+  const eventId = String(event?.id || "").trim();
+  if (!eventId) return null;
+  return {
+    id: eventId,
+    post_slug: postSlug,
+    author: normalizeCommentPubkey(event?.pubkey),
+    markdown: String(payload?.markdown || payload?.body || "").trim(),
+    parent_id: parentId,
+    root_id: rootId || (parentId ? parentId : ""),
+    created_at: toCommentUnix(event?.created_at),
+    id_event: eventId,
+    _event: event
+  };
+}
+
 export function createNostrCmsClient(config) {
 let publicStatePromise = null;
 let toolsPromise = null;
@@ -1089,24 +1142,9 @@ function buildPublicState(events, seedEntities = []) {
     }
 
     if (kind === config.nostr.kinds.comment) {
-      const payload = parseObject(event.content);
-      const commentId = firstTag(event, "d") || event.id;
-      const postSlug = cleanSlug(payload?.post_slug || firstTag(event, "a"));
-      if (!postSlug) continue;
-      const parentId = String(payload?.parent_id || firstTag(event, "parent") || firstTag(event, "e") || "").trim();
-      const rootId = String(payload?.root_id || firstTag(event, "root") || "").trim();
-      const next = {
-        id: commentId,
-        post_slug: postSlug,
-        author: normalizePubkey(event.pubkey),
-        markdown: String(payload?.markdown || payload?.body || "").trim(),
-        parent_id: parentId,
-        root_id: rootId || (parentId ? parentId : ""),
-        created_at: toUnix(event.created_at),
-        id_event: event.id,
-        _event: event
-      };
-      mergeLatest(comments, commentId, next);
+      const next = parsePublicCommentEvent(event);
+      if (!next) continue;
+      mergeLatest(comments, next.id, next);
       continue;
     }
 

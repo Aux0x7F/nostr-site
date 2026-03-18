@@ -570,7 +570,6 @@ async function renderComments(postSlug, publicState) {
           kind: SITE.nostr.kinds.comment,
           secretKeyHex: state.session.secretKeyHex,
           tags: [
-            ["d", `comment-${Date.now()}`],
             ["a", postSlug],
             ...(parentId ? [["e", parentId], ["parent", parentId]] : []),
             ...(rootId ? [["root", rootId]] : [])
