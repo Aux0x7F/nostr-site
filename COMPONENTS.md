@@ -126,3 +126,6 @@ Current extracted template surface families:
 - `scripts/template/surfaces/archive.js`
 - `scripts/template/surfaces/comments.js`
 - `scripts/template/surfaces/workspace.js`
+- `scripts/template/surfaces/workspace-actions.js`
+- `scripts/template/surfaces/map.js`
+- `scripts/template/surfaces/editor-shell.js`

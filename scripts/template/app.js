@@ -23,6 +23,14 @@ import {
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
 import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
+import {
+  bindMapEntityCards as bindMapSurfaceEntityCards,
+  destroyLeafletMap as destroySurfaceLeafletMap,
+  renderLeafletMapSurface,
+  renderMapPageSurface,
+  requestedMapEntity,
+  scheduleMapEntityFocus as scheduleSurfaceMapEntityFocus
+} from "./surfaces/map.js";
 import { renderNavigationMarkup, profileInitials } from "./surfaces/navigation.js";
 
 const NAV_KEYS = {
@@ -56,7 +64,10 @@ const state = {
   notifications: [],
   notificationsLoading: false,
   map: null,
-  markers: null
+  markers: null,
+  mapCanvas: null,
+  markerIndex: null,
+  pendingMapEntitySlug: ""
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -399,17 +410,14 @@ async function initMapPage() {
   const publicState = await getPublicState();
   if (!publicState.approvedEntities.length) {
     list.innerHTML = `<div class="empty-state">Published entities will appear here once approved entries are available.</div>`;
+    destroyLeafletMap();
     canvas.innerHTML = `<div class="map-empty">Map data unavailable.</div>`;
     return;
   }
 
   const posts = await loadPosts().catch(() => []);
   const entityUsage = buildEntityUsage(posts, publicState.approvedEntities);
-  list.innerHTML = publicState.approvedEntities
-    .map((entity) => renderEntityCard(entity, entityUsage.get(entity.slug) || []))
-    .join("");
-  renderLeafletMap(canvas, publicState.approvedEntities);
-  focusRequestedEntity();
+  renderMapPageSurface(list, canvas, publicState.approvedEntities, entityUsage, mapSurfaceDeps());
 }
 
 async function renderComments(postSlug, publicState) {
@@ -1090,66 +1098,42 @@ function renderEntityCard(entity, posts) {
   `;
 }
 
-function renderLeafletMap(canvas, entities) {
-  if (!window.L) {
-    canvas.innerHTML = `<div class="map-empty">Map library unavailable.</div>`;
-    return;
-  }
-  canvas.innerHTML = "";
-  if (!state.map) {
-    state.map = window.L.map(canvas, {
-      zoomControl: true,
-      scrollWheelZoom: false
-    }).setView(SITE.map.defaultCenter, SITE.map.defaultZoom);
-    window.L.tileLayer(SITE.map.tileUrl, {
-      attribution: SITE.map.tileAttribution,
-      minZoom: SITE.map.minZoom
-    }).addTo(state.map);
-  }
-  if (state.markers) state.markers.remove();
-  state.markers = window.L.layerGroup().addTo(state.map);
+function destroyLeafletMap() {
+  destroySurfaceLeafletMap(state);
+}
 
-  const points = [];
-  for (const entity of entities) {
-    if (!Number.isFinite(entity.lat) || !Number.isFinite(entity.lng)) continue;
-    points.push([entity.lat, entity.lng]);
-    const marker = window.L.circleMarker([entity.lat, entity.lng], {
-      radius: 8,
-      color: "#6f0d09",
-      weight: 2,
-      fillColor: "#b3201a",
-      fillOpacity: 0.88
-    }).addTo(state.markers);
-    marker.bindPopup(`
-      <div class="map-popup">
-        <strong>${escapeHtml(entity.name)}</strong>
-        <div>${escapeHtml(entity.location)}</div>
-        <a href="./map.html?entity=${encodeURIComponent(entity.slug)}">Open entry</a>
-      </div>
-    `);
-    marker.on("click", () => {
-      const card = document.querySelector(`[data-entity-card="${entity.slug}"]`);
-      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-  }
+function mapSurfaceDeps() {
+  return {
+    mapState: state,
+    renderEntityCard,
+    renderLeafletMapSurface: (canvas, entities) =>
+      renderLeafletMapSurface(canvas, entities, state, {
+        escapeHtml,
+        scheduleMapEntityFocus,
+        queryEntityCard: (slug) => document.querySelector(`[data-entity-card="${slug}"]`)
+      }),
+    bindMapEntityCards: () => bindMapSurfaceEntityCards((slug) => scheduleMapEntityFocus(slug)),
+    focusRequestedEntity
+  };
+}
 
-  if (points.length) {
-    state.map.fitBounds(points, { padding: [40, 40] });
-  } else {
-    state.map.setView(SITE.map.defaultCenter, SITE.map.defaultZoom);
-  }
-
-  window.setTimeout(() => state.map?.invalidateSize(), 50);
+function scheduleMapEntityFocus(slug, options = {}, attempt = 0) {
+  scheduleSurfaceMapEntityFocus(
+    slug,
+    state,
+    {
+      cleanSlug,
+      queryEntityCard: (value) => document.querySelector(`[data-entity-card="${value}"]`)
+    },
+    options,
+    attempt
+  );
 }
 
 function focusRequestedEntity() {
-  const requested = cleanSlug(new URLSearchParams(window.location.search).get("entity") || "");
+  const requested = requestedMapEntity(window.location.search, cleanSlug);
   if (!requested) return;
-  const card = document.querySelector(`[data-entity-card="${requested}"]`);
-  if (card) {
-    card.classList.add("entity-card--focus");
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+  scheduleMapEntityFocus(requested);
 }
 
 async function getPublicState() {

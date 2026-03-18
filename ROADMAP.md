@@ -10,11 +10,11 @@
 - Browser-compatibility fallback rules are now documented for the template layer.
 - Branch-purpose-squash is now the documented contribution pattern.
 - Downstream validation has now proven the first broad extracted surface split for navigation, archive, comment, and workspace behavior.
-- The template now applies that same split directly in code through `scripts/template/surfaces`.
+- The template now applies that same split directly in code through `scripts/template/surfaces`, including workspace actions, map shells, and editor-shell rendering.
 
 ## Next Tightening Step
 
-- Finish the split between portable state logic and reusable surface primitives so action sheets, moderation modals, editor rails, and remaining map shells stop living inside large page controllers.
+- Finish the split between portable state logic and reusable surface primitives so notifications, profile-menu state, editor side rails, and remaining long-lived controller state stop living inside large page controllers.
 
 That specifically means:
 

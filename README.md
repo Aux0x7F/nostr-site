@@ -32,7 +32,7 @@ Portable static-first site template for blogs, archives, documentation hubs, and
 - `TESTING.md`: regression and validation contract
 - `scripts/`: browser entrypoints and template implementation
 - `scripts/core/`: site config, session, content, and Nostr helpers
-- `scripts/template/surfaces/`: reusable template-level navigation, archive, comment, and workspace surface modules, with more UI families intended to move here
+- `scripts/template/surfaces/`: reusable template-level navigation, archive, comment, workspace, workspace-action, map, and editor-shell surface modules
 - `portable/`: source-of-truth reusable Nostr/CMS logic
 - `support-lib/`: minified reusable browser package built from `portable/`
 - `peer-pinner/`: self-hosted relay mirror / fulfillment gate package
