@@ -13,15 +13,17 @@ export function profileInitials(value) {
 }
 
 export function profileBadgeMarkup(user, sessionUsername, deps = {}) {
+  const safeAvatarUrl = deps.safeAvatarUrl || ((value) => value);
   const escapeAttribute = deps.escapeAttribute || ((value) => String(value || ""));
   const escapeHtml = deps.escapeHtml || ((value) => String(value || ""));
-  if (user?.avatarUrl) {
-    const label = user.displayName || user.username || "Profile";
-    const blob = user.avatarBlob;
+  const avatarUrl = safeAvatarUrl(user?.avatarUrl || "");
+  if (avatarUrl) {
+    const label = user?.displayName || user?.username || "Profile";
+    const blob = user?.avatarBlob;
     const blobAttrs = blob?.sha256
-      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || user.avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
+      ? ` data-avatar-sha="${escapeAttribute(blob.sha256)}" data-avatar-url="${escapeAttribute(blob.url || avatarUrl)}" data-avatar-type="${escapeAttribute(blob.type || "")}" data-avatar-name="${escapeAttribute(blob.name || "")}"`
       : "";
-    return `<img src="${escapeAttribute(user.avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}>`;
+    return `<img src="${escapeAttribute(avatarUrl)}" alt="${escapeAttribute(label)}"${blobAttrs}>`;
   }
   if (!sessionUsername) return "Create/Login";
   return escapeHtml(profileInitials(user?.displayName || sessionUsername));
@@ -48,33 +50,60 @@ export function renderNavigationMarkup({
   sessionUsername = "",
   notifications = [],
   notificationsLoading = false,
+  profileMenuOpen = false,
+  notificationsExpanded = false,
   mapEnabled = true,
   deps = {}
 } = {}) {
+  const escapeHtml = deps.escapeHtml || ((value) => String(value || ""));
+  const countUnreadNotifications = deps.countUnreadNotifications || ((items) => Array.isArray(items) ? items.length : 0);
+  const safeAvatarUrl = deps.safeAvatarUrl || ((value) => value);
+  const unreadCount = isLoggedIn ? countUnreadNotifications(notifications) : 0;
+  const expanded = unreadCount || notificationsLoading ? notificationsExpanded : false;
   const profileMarkup = isLoggedIn
     ? `
-      <div class="profile-menu ${navKeys.workspace?.includes(page) ? "is-current" : ""}" data-profile-menu>
-        <button class="profile-menu__toggle ${currentUser?.avatarUrl ? "has-avatar" : ""}" type="button" data-profile-toggle aria-label="Profile options">
-          <span class="profile-menu__badge ${currentUser?.avatarUrl ? "has-avatar" : ""}">${profileBadgeMarkup(currentUser, sessionUsername, deps)}</span>
-          ${notifications.length ? `<span class="profile-menu__notice">${Math.min(notifications.length, 9)}${notifications.length > 9 ? "+" : ""}</span>` : ""}
+      <div class="profile-menu ${navKeys.workspace?.includes(page) ? "is-current" : ""} ${profileMenuOpen ? "is-open" : ""}" data-profile-menu>
+        <button class="profile-menu__toggle ${safeAvatarUrl(currentUser?.avatarUrl || "") ? "has-avatar" : ""}" type="button" data-profile-toggle aria-label="${isAdmin ? "Admin" : "Profile"}">
+          <span class="profile-menu__badge ${safeAvatarUrl(currentUser?.avatarUrl || "") ? "has-avatar" : ""}">${profileBadgeMarkup(currentUser, sessionUsername, deps)}</span>
+          ${unreadCount ? `<span class="profile-menu__notice">${Math.min(unreadCount, 9)}${unreadCount > 9 ? "+" : ""}</span>` : ""}
         </button>
         <div class="profile-menu__panel">
-          ${
-            notificationsLoading
-              ? `<div class="profile-menu__section"><div class="loading-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Looking up notifications...</span></div></div>`
-              : notifications.length
+          <div class="profile-menu__section">
+            <button class="profile-menu__notification-toggle ${expanded ? "is-open" : ""}" type="button" data-notification-toggle>
+              <span class="profile-menu__notification-toggle-copy">
+                <strong>Notifications</strong>
+                <span>${
+                  notificationsLoading
+                    ? "Looking up updates"
+                    : unreadCount
+                      ? `${unreadCount} item${unreadCount === 1 ? "" : "s"} waiting`
+                      : "No new updates"
+                }</span>
+              </span>
+              ${unreadCount ? `<span class="profile-menu__inline-badge">${Math.min(unreadCount, 9)}${unreadCount > 9 ? "+" : ""}</span>` : `<span class="profile-menu__inline-badge is-muted">0</span>`}
+            </button>
+            ${
+              expanded
                 ? `
-                  <div class="profile-menu__section">
-                    <div class="profile-menu__section-title">Notifications</div>
-                    <div class="profile-menu__notifications">
-                      ${notifications.map((item) => renderNotificationItem(item, deps)).join("")}
-                    </div>
+                  <div class="profile-menu__notification-shell">
+                    ${
+                      notificationsLoading
+                        ? `<div class="loading-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Looking up notifications...</span></div>`
+                        : notifications.length
+                          ? `
+                            <div class="profile-menu__notifications">
+                              ${notifications.map((item) => renderNotificationItem(item, deps)).join("")}
+                            </div>
+                            <button class="profile-menu__clear" type="button" data-clear-notifications>Clear notifications</button>
+                          `
+                          : `<div class="profile-menu__notification-empty">No notifications right now.</div>`
+                    }
                   </div>
                 `
                 : ""
-          }
-          <a href="./admin.html?tab=profile">Profile</a>
-          ${isAdmin ? `<a href="./admin.html?tab=dashboard">Admin</a>` : ""}
+            }
+          </div>
+          <a href="./admin.html?tab=${isAdmin ? "dashboard" : "profile"}">${isAdmin ? "Admin" : "Profile"}</a>
           <button type="button" data-signout>Sign out</button>
         </div>
       </div>

@@ -12,10 +12,13 @@
 - Downstream validation has now proven the first broad extracted surface split for navigation, archive, comment, and workspace behavior.
 - The template now applies that same split directly in code through `scripts/template/surfaces`, including workspace actions, map shells, and editor-shell rendering.
 - The template now also shares one extracted public-state store boundary for public, workspace, and editor lifecycle instead of repeating repair and hydrate mechanics in each controller.
+- Notification state and profile-menu UI state now live in dedicated core modules instead of controller-local toggles and storage logic.
+- Submit-shell rendering now lives in a dedicated template surface module, so the modal family matches the rest of the extracted surface split.
+- Workspace picker and filter suggestion markup now live in dedicated template surface modules instead of staying embedded in admin controllers.
 
 ## Next Tightening Step
 
-- Finish the remaining controller cleanup so notifications, profile-menu state, editor side rails, and repeated modal/action-sheet logic stop living inside large page controllers.
+- Expand the normalized template shell into richer collaborative rails, broader live-unit overlays, and stronger downstream browser validation.
 
 That specifically means:
 

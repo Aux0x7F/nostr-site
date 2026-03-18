@@ -31,6 +31,10 @@ import {
   renderSubmissionCard as renderWorkspaceSubmissionCard,
   renderUserCard as renderWorkspaceUserCard
 } from "./surfaces/workspace-actions.js";
+import {
+  renderEntityPickerResultsMarkup,
+  renderLocationResultsMarkup
+} from "./surfaces/workspace-filters.js";
 import { renderWorkspaceView } from "./surfaces/workspace.js";
 
 const workspacePublicStateStore = createPublicStateStore({
@@ -1103,22 +1107,10 @@ function renderEntityPickerResults(fieldName) {
   if (!(host instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
   const query = fieldName === "entityRefs" ? lastCommaValue(input.value) : input.value.trim();
   const matches = matchEntities(query).slice(0, 6);
-  if (!query) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = matches.length
-    ? matches
-        .map(
-          (entity) => `
-            <button class="picker-chip" type="button" data-entity-pick="${escapeAttribute(entity.slug)}" data-target-field="${fieldName}">
-              <strong>${escapeHtml(entity.name)}</strong>
-              <span>${escapeHtml(entity.location)}</span>
-            </button>
-          `
-        )
-        .join("")
-    : `<div class="picker-hint">No match yet. Use the create button to add a new entity.</div>`;
+  host.innerHTML = renderEntityPickerResultsMarkup(fieldName, query, matches, {
+    escapeAttribute,
+    escapeHtml
+  });
 }
 
 function renderLocationResults() {
@@ -1129,21 +1121,10 @@ function renderLocationResults() {
   const matches = uniqueLocations()
     .filter((location) => !query || location.toLowerCase().includes(query))
     .slice(0, 6);
-  if (!query && !matches.length) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = matches.length
-    ? matches
-        .map(
-          (location) => `
-            <button class="picker-chip" type="button" data-location-pick="${escapeAttribute(location)}">
-              <strong>${escapeHtml(location)}</strong>
-            </button>
-          `
-        )
-        .join("")
-    : `<div class="picker-hint">No saved location matches. Keep the typed value to create a new one.</div>`;
+  host.innerHTML = renderLocationResultsMarkup(query, matches, {
+    escapeAttribute,
+    escapeHtml
+  });
 }
 
 function applyEntityPick(button) {

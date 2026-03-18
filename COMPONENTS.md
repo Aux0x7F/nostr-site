@@ -123,10 +123,14 @@ When a repeated pattern appears more than once, the next change should move it t
 
 Current extracted template surface families:
 
+- `scripts/core/navigation-state.js`
+- `scripts/core/notification-state.js`
 - `scripts/template/surfaces/navigation.js`
 - `scripts/template/surfaces/archive.js`
 - `scripts/template/surfaces/comments.js`
+- `scripts/template/surfaces/submit-shell.js`
 - `scripts/template/surfaces/workspace.js`
+- `scripts/template/surfaces/workspace-filters.js`
 - `scripts/template/surfaces/workspace-actions.js`
 - `scripts/template/surfaces/map.js`
 - `scripts/template/surfaces/editor-shell.js`

@@ -38,9 +38,12 @@ See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback ex
 - `node --test test/archive-surface.test.mjs`
 - `node --test test/shell-surfaces.test.mjs`
 - `node --test test/public-state-store.test.mjs`
+- `node --test test/navigation-notification.test.mjs`
 - `node --test test/workspace-actions.test.mjs`
+- `node --test test/workspace-filters.test.mjs`
 - `node --test test/editor-shell.test.mjs`
 - `node --test test/map-surface.test.mjs`
+- `node --test test/submit-shell.test.mjs`
 - `npm run build`
 - `npm run build:support-lib`
 - `npm run smoke:browser`

@@ -17,6 +17,18 @@ import {
   publishTaggedJson,
 } from "../core/nostr.js";
 import { createPublicStateStore } from "../core/public-state-store.js";
+import {
+  clampNotificationsPanel,
+  closeProfileMenu,
+  createNavigationUiState,
+  keepProfileMenuOpen,
+  toggleNotificationsPanel,
+  toggleProfileMenu
+} from "../core/navigation-state.js";
+import {
+  countNotificationItems,
+  createNotificationState
+} from "../core/notification-state.js";
 import { clearSession, getOrCreateGuestSession, getStoredGuestSession, getStoredSession } from "../core/session.js";
 import { renderComment, renderCommentCountLabel } from "./surfaces/comments.js";
 import { buildBlogArchiveEntries, renderAuthoringLeadCard, renderPostCard } from "./surfaces/archive.js";
@@ -47,6 +59,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   year: "numeric"
 });
+const navigationUi = createNavigationUiState();
 
 const publicStateStore = createPublicStateStore({
   getSessionSecretKey: getRequestSignerSecretKey,
@@ -62,14 +75,22 @@ const state = {
   publicState: publicStateStore.value,
   postsPromise: null,
   commentReply: null,
-  notifications: [],
-  notificationsLoading: false,
+  navigationUi,
   map: null,
   markers: null,
   mapCanvas: null,
   markerIndex: null,
   pendingMapEntitySlug: ""
 };
+
+const notificationState = createNotificationState({
+  storageNamespace: SITE.nostr.storageNamespace,
+  onChange: () => renderNavigation(),
+  getSession: () => state.session,
+  getViewerPubkey: () => state.viewer?.pubkey || "",
+  getPublicState: (force) => getPublicState(force),
+  buildNotifications: ({ publicState, force }) => buildNotifications(publicState, force)
+});
 
 publicStateStore.subscribe((snapshot) => {
   state.publicState = snapshot.value;
@@ -140,12 +161,37 @@ function initNavigation() {
 
     const profileToggle = target.closest("[data-profile-toggle]");
     if (profileToggle) {
-      const menu = profileToggle.closest("[data-profile-menu]");
-      if (menu) {
-        const isOpen = !menu.classList.contains("is-open");
-        menu.classList.toggle("is-open", isOpen);
-        if (isOpen) markNotificationsSeen();
-      }
+      toggleProfileMenu(state.navigationUi);
+      renderNavigation();
+      return;
+    }
+
+    if (target.closest("[data-notification-toggle]")) {
+      event.preventDefault();
+      toggleNotificationsPanel(state.navigationUi, {
+        count: countNotificationItems(notificationState.items),
+        loading: notificationState.loading
+      });
+      renderNavigation();
+      return;
+    }
+
+    if (target.closest("[data-clear-notifications]")) {
+      event.preventDefault();
+      notificationState.clear();
+      keepProfileMenuOpen(state.navigationUi);
+      clampNotificationsPanel(state.navigationUi, { count: 0, loading: false });
+      renderNavigation();
+      return;
+    }
+
+    const notificationLink = target.closest("[data-notification-link]");
+    if (notificationLink) {
+      notificationState.dismiss(notificationLink.getAttribute("data-notification-link") || "");
+      clampNotificationsPanel(state.navigationUi, {
+        count: countNotificationItems(notificationState.items),
+        loading: notificationState.loading
+      });
       return;
     }
 
@@ -161,7 +207,10 @@ function initNavigation() {
     }
 
     for (const menu of document.querySelectorAll("[data-profile-menu].is-open")) {
-      if (!menu.contains(target)) menu.classList.remove("is-open");
+      if (!menu.contains(target)) {
+        closeProfileMenu(state.navigationUi);
+        renderNavigation();
+      }
     }
     for (const group of document.querySelectorAll("[data-nav-group].is-open")) {
       if (!group.contains(target)) group.classList.remove("is-open");
@@ -211,7 +260,11 @@ function renderNavigation() {
       state.viewer &&
       state.publicState?.admins?.includes(state.viewer.pubkey)
   );
-  const notifications = isLoggedIn ? state.notifications.slice(0, 8) : [];
+  const notifications = isLoggedIn ? notificationState.items.slice(0, 8) : [];
+  const notificationsExpanded = clampNotificationsPanel(state.navigationUi, {
+    count: countNotificationItems(notifications),
+    loading: notificationState.loading
+  });
   const mapEnabled = Boolean(state.publicState?.connected || state.publicState?.approvedEntities?.length);
   nav.innerHTML = renderNavigationMarkup({
     page,
@@ -221,10 +274,12 @@ function renderNavigation() {
     currentUser,
     sessionUsername: state.session?.username || "",
     notifications,
-    notificationsLoading: state.notificationsLoading,
+    notificationsLoading: notificationState.loading,
+    profileMenuOpen: state.navigationUi.profileMenuOpen,
+    notificationsExpanded,
     mapEnabled,
     deps: {
-      countUnreadNotifications,
+      countUnreadNotifications: countNotificationItems,
       escapeAttribute,
       escapeHtml
     }
@@ -816,7 +871,7 @@ function bindReviewPreviewPanel(panel, draft) {
           }
         });
         state.publicState = (await publicStateStore.hydrate({ force: true, reason: "review-action" })).value;
-        state.notifications = [];
+        notificationState.reset();
         void hydrateNotifications(true);
         if (statusBox instanceof HTMLElement) {
           statusBox.textContent = reviewActionMessage(action);
@@ -850,33 +905,17 @@ function reviewActionMessage(action) {
 }
 
 async function hydrateNotifications(force = false) {
-  if (!state.session) {
-    state.notifications = [];
-    state.notificationsLoading = false;
-    return;
-  }
   const publicState = await getPublicState();
   if (!editorEntryAllowed(publicState) && !state.viewer) {
     state.viewer = deriveIdentity(state.session.secretKeyHex);
   }
-  if (!state.viewer) return;
-  state.notificationsLoading = true;
-  renderNavigation();
-  try {
-    state.notifications = await buildNotifications(publicState, force);
-  } catch {
-    state.notifications = [];
-  } finally {
-    state.notificationsLoading = false;
-    renderNavigation();
-  }
+  await notificationState.hydrate({ publicState, force });
 }
 
 async function buildNotifications(publicState) {
   const viewer = state.viewer;
   if (!viewer) return [];
   const notifications = [];
-  const seenAt = notificationSeenAt();
   const isAdmin = publicState.admins?.includes(viewer.pubkey);
   const commentMap = new Map((publicState.allComments || []).map((comment) => [comment.id, comment]));
 
@@ -888,7 +927,6 @@ async function buildNotifications(publicState) {
       id: `comment-reply:${comment.id}`,
       createdAt: comment.created_at,
       href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-      unread: comment.created_at > seenAt,
       label: "Comment reply",
       title: "Someone replied to your comment",
       detail: trimmed(comment.markdown, 100)
@@ -901,7 +939,6 @@ async function buildNotifications(publicState) {
       id: `submission-status:${status.submission_id}:${status.updated_at}`,
       createdAt: status.updated_at,
       href: "./submit.html",
-      unread: status.updated_at > seenAt,
       label: "Submission update",
       title: `Submission ${status.status}`,
       detail: status.note || "A submission you sent has a new status."
@@ -919,7 +956,6 @@ async function buildNotifications(publicState) {
         href: normalizeDraftStatus(draft.status) === "revision"
           ? `./editor.html?slug=${encodeURIComponent(draft.slug)}`
           : `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        unread: draft.created_at > seenAt,
         label: "Post review",
         title: reviewNotificationTitle(reviewAction),
         detail: draft.title
@@ -930,7 +966,6 @@ async function buildNotifications(publicState) {
         id: `pending-draft:${draft.slug}:${draft.created_at}`,
         createdAt: draft.created_at,
         href: `./post.html?draft=${encodeURIComponent(draft.slug)}`,
-        unread: draft.created_at > seenAt,
         label: "Review queue",
         title: "New post pending review",
         detail: draft.title
@@ -945,7 +980,6 @@ async function buildNotifications(publicState) {
         id: `post-comment:${comment.id}`,
         createdAt: comment.created_at,
         href: `./post.html?slug=${encodeURIComponent(comment.post_slug)}#comment-${encodeURIComponent(comment.id)}`,
-        unread: comment.created_at > seenAt,
         label: "Post reply",
         title: "New comment on a published post",
         detail: trimmed(comment.markdown, 100)
@@ -954,15 +988,11 @@ async function buildNotifications(publicState) {
   }
 
   const submissionNotifications = await loadSubmissionNotifications(publicState, viewer.pubkey, isAdmin);
-  notifications.push(...submissionNotifications.map((item) => ({
-    ...item,
-    unread: item.createdAt > seenAt
-  })));
+  notifications.push(...submissionNotifications);
 
   return notifications
     .sort((left, right) => right.createdAt - left.createdAt)
-    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index)
-    .slice(0, 12);
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
 }
 
 async function loadSubmissionNotifications(publicState, viewerPubkey, isAdmin) {
@@ -1026,31 +1056,6 @@ function notificationSitePubkeys(publicState) {
     publicState?.siteInfo?.fallbackPubkey || "",
     ...((publicState?.siteInfo?.events || []).map((event) => event.site_pubkey || ""))
   ]);
-}
-
-function notificationSeenAt() {
-  if (!state.viewer?.pubkey) return 0;
-  const raw = window.localStorage.getItem(notificationSeenKey(state.viewer.pubkey));
-  const value = Number(raw || 0);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function notificationSeenKey(pubkey) {
-  return `${SITE.nostr.storageNamespace}.notifications.seen.${pubkey}`;
-}
-
-function markNotificationsSeen() {
-  if (!state.viewer?.pubkey || !state.notifications.length) return;
-  const latest = state.notifications.reduce((max, item) => Math.max(max, Number(item.createdAt || 0)), 0);
-  if (!latest) return;
-  window.localStorage.setItem(notificationSeenKey(state.viewer.pubkey), String(latest));
-  state.notifications = state.notifications.map((item) => ({ ...item, unread: false }));
-  const badge = document.querySelector(".profile-menu__notice");
-  if (badge) badge.remove();
-}
-
-function countUnreadNotifications(notifications) {
-  return (Array.isArray(notifications) ? notifications : []).filter((item) => item.unread).length;
 }
 
 function reviewNotificationTitle(action) {
