@@ -1,15 +1,15 @@
 # Integration Contract
 
-This document describes how `nostr-site` should consume `nostr-crdt`.
+This document describes how `nostr-site` consumes `nostr-crdt`.
 
 It is intentionally separate from `ARCHITECTURE.md`:
 
-- `ARCHITECTURE.md` explains the repo boundary and long-term model
-- `INTEGRATION.md` explains how the framework should hook into a generic CRDT transport
+- `ARCHITECTURE.md` explains the repo boundary and current runtime model
+- `INTEGRATION.md` explains how the framework hooks into a generic CRDT transport
 
 ## Boundary
 
-`nostr-site` should treat `nostr-crdt` as a transport and merge layer, not as an application framework.
+`nostr-site` treats `nostr-crdt` as a transport and merge layer, not as an application framework.
 
 That means:
 
@@ -19,7 +19,7 @@ That means:
 
 ## First integration targets
 
-The first collaborative unit types should be:
+The first collaborative unit types are:
 
 - static pages
 - posts
@@ -29,7 +29,7 @@ Everything else can remain event-shaped until a collaboration need justifies mov
 
 ## Acceptance hook
 
-`nostr-site` should provide an acceptance function to the transport layer.
+`nostr-site` provides an acceptance function to the transport layer.
 
 At a minimum, it must answer:
 
@@ -40,7 +40,7 @@ The transport library should not embed those rules.
 
 ## Rendering contract
 
-`nostr-site` should render:
+`nostr-site` renders:
 
 1. static baseline
 2. trusted live overlay
@@ -61,7 +61,7 @@ Template-facing expectations for the resulting surfaces belong in:
 
 ## Pinner contract
 
-Peer pinner should interact with collaborative units by:
+Peer pinner interacts with collaborative units by:
 
 - replaying current trusted document state
 - optionally checkpointing it
@@ -74,7 +74,7 @@ Peer pinner should not be required for basic browser collaboration to work.
 
 Until the CRDT transport lands, existing event-shaped workflows remain valid.
 
-The migration path should be:
+The migration path is:
 
 1. keep current static-first rendering
 2. add live collaborative units one unit type at a time
@@ -114,7 +114,7 @@ The public-state model now also includes comment vote aggregation:
 - `commentVotes`
 - `score`, `upvoteCount`, and `downvoteCount` on comment records
 
-The first intended consumer is static page units.
+The first consumer is static page units.
 
 `createStaticPageOverlayApi(config)` is the higher-level helper for that first slice. It provides:
 

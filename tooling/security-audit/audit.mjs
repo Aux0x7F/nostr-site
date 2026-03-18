@@ -13,7 +13,7 @@ const passes = [];
 checkExists("support library bundle", "support-lib/dist/nostr-site-support.esm.js");
 checkExists("peer pinner bundle", "peer-pinner/dist/peer-pinner.js");
 checkExists("browser smoke harness", "tooling/browser-smoke/package.json");
-checkExists("security checklist", "SECURITY_CHECKLIST.md");
+checkExists("security checklist", "docs/SECURITY_CHECKLIST.md");
 checkHtmlPolicyMeta();
 
 const siteConfig = readText("scripts/core/site-config.js");

@@ -4,6 +4,7 @@
 
 ## Completed Recently
 
+- Contract, security, and roadmap docs now live under `docs/` instead of cluttering the repo root.
 - Cache-first public-state restore is now a documented framework contract.
 - Comment thread derivation and comment vote aggregation are now explicit reusable state behavior.
 - Static-page and structured-unit live overlay helpers are in place.
