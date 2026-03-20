@@ -75,6 +75,38 @@ export function createDeterministicSessionApi(config, deps) {
     localStorage.removeItem(guestStorageKey);
   }
 
+  async function repairSession(session, options = {}) {
+    if (!session || typeof session !== "object") return null;
+    const normalized = {
+      username: normalizeUsername(session.username),
+      secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase(),
+      pubkey: String(session.pubkey || "").trim().toLowerCase()
+    };
+    if (!normalized.username || !normalized.secretKeyHex) {
+      return normalized;
+    }
+    let repairedSession = normalized;
+    if (!repairedSession.pubkey) {
+      try {
+        await ensureEventToolsLoaded();
+        const identity = deriveIdentity(repairedSession.secretKeyHex);
+        const derivedPubkey = String(identity?.pubkey || "").trim().toLowerCase();
+        if (derivedPubkey) {
+          repairedSession = {
+            ...repairedSession,
+            pubkey: derivedPubkey
+          };
+        }
+      } catch {
+        return repairedSession;
+      }
+    }
+    if (options?.persistSession !== false) {
+      saveSession(repairedSession);
+    }
+    return repairedSession;
+  }
+
   async function signInWithCredentials(username, password, options = {}) {
     const normalized = normalizeUsername(username);
     if (!normalized) throw new Error("Enter a username.");
@@ -282,6 +314,7 @@ export function createDeterministicSessionApi(config, deps) {
     getStoredSession,
     saveSession,
     clearSession,
+    repairSession,
     getStoredGuestSession,
     saveGuestSession,
     clearGuestSession,
