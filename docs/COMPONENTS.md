@@ -12,6 +12,7 @@ Whole UI families should converge into reusable surface modules before they are 
 - Mounted shells should update by observed region instead of replacing the whole shell on every state change.
 - Unrelated state changes must not reset active form input, open modals, or other local draft UI.
 - Local draft UI state and async network/public state should be treated as separate concerns.
+- Legacy deterministic sessions missing a stored `pubkey` should be repaired in shared session or viewer helpers, not page-local account handlers.
 
 ## Global shell
 

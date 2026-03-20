@@ -13,6 +13,7 @@ import {
   deriveIdentity,
   ensureBlobAvailable,
   ensureEventToolsLoaded,
+  hasNostrTools,
   loadAdminKeyShare,
   loadInboxSubmissions,
   loadSubmissionThread,
@@ -38,7 +39,7 @@ import {
   draftStatusLabel,
   normalizeDraftStatus
 } from "../core/draft-review.js";
-import { getStoredGuestSession, getStoredSession } from "../core/session.js";
+import { getStoredGuestSession, getStoredSession, saveSession } from "../core/session.js";
 import {
   bindMapEntityCards as bindMapSurfaceEntityCards,
   renderLeafletMapSurface,
@@ -103,7 +104,9 @@ const state = {
 const viewerController = createViewerController({
   state,
   site: SITE,
-  deriveIdentity
+  deriveIdentity,
+  hasNostrTools,
+  persistSession: saveSession
 });
 
 let siteShellFeature = null;
