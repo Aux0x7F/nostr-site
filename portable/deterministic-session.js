@@ -75,7 +75,7 @@ export function createDeterministicSessionApi(config, deps) {
     localStorage.removeItem(guestStorageKey);
   }
 
-  async function signInWithCredentials(username, password) {
+  async function signInWithCredentials(username, password, options = {}) {
     const normalized = normalizeUsername(username);
     if (!normalized) throw new Error("Enter a username.");
     if (!String(password || "").trim()) throw new Error("Enter a password.");
@@ -87,6 +87,9 @@ export function createDeterministicSessionApi(config, deps) {
       secretKeyHex,
       pubkey: identity.pubkey
     };
+    if (typeof options?.validateSession === "function") {
+      await options.validateSession(session);
+    }
     saveSession(session);
     return session;
   }
@@ -116,9 +119,12 @@ export function createDeterministicSessionApi(config, deps) {
     throw new Error("Could not derive a valid guest identity.");
   }
 
-  async function rebroadcastAccount(session, profile = {}) {
+  async function rebroadcastAccount(session, profile = {}, options = {}) {
     if (!session?.secretKeyHex || !session?.username) return null;
     const username = normalizeUsername(session.username);
+    if (typeof options?.validateSession === "function") {
+      await options.validateSession(session);
+    }
     const publishProfile = () =>
       publishTaggedJson({
         kind: config.nostr.kinds.profile,
@@ -162,6 +168,93 @@ export function createDeterministicSessionApi(config, deps) {
     return session;
   }
 
+  async function rotateAccountCredentials(session, nextPassword, options = {}) {
+    const currentUsername = normalizeUsername(session?.username || "");
+    if (!session?.secretKeyHex || !currentUsername) throw new Error("Sign in before rotating this account.");
+    if (!String(nextPassword || "").trim()) throw new Error("Enter a new password.");
+    const nextUsername = normalizeUsername(options?.nextUsername || currentUsername);
+    if (nextUsername !== currentUsername) {
+      throw new Error("Username changes are not supported during password rotation.");
+    }
+    const nextSecretKeyHex = await deriveSecretKeyHex(nextUsername, nextPassword);
+    await ensureEventToolsLoaded();
+    const currentIdentity = deriveIdentity(session.secretKeyHex);
+    const nextIdentity = deriveIdentity(nextSecretKeyHex);
+    const nextSession = {
+      username: nextUsername,
+      secretKeyHex: nextSecretKeyHex,
+      pubkey: nextIdentity.pubkey
+    };
+    if (typeof options?.validateCurrentSession === "function") {
+      await options.validateCurrentSession(session);
+    }
+    const rotationId = String(options?.rotationId || `rotate:${currentIdentity.pubkey}:${nextIdentity.pubkey}`).trim();
+    const createdAt = Math.floor(Date.now() / 1000);
+    const commonTags = [
+      ["d", rotationId],
+      ["from", currentIdentity.pubkey],
+      ["to", nextIdentity.pubkey],
+      ["u", nextUsername]
+    ];
+    const content = {
+      protocol: String(config?.nostr?.protocolPrefix || config?.nostr?.clientName || config?.nostr?.appTag || "nostr-site"),
+      rotation_id: rotationId,
+      old_pubkey: currentIdentity.pubkey,
+      new_pubkey: nextIdentity.pubkey,
+      username: nextUsername,
+      rotated_at: new Date(createdAt * 1000).toISOString()
+    };
+    const publishPropose = () =>
+      publishTaggedJson({
+        kind: config.nostr.kinds.identityRotation,
+        secretKeyHex: session.secretKeyHex,
+        tags: [...commonTags],
+        createdAt,
+        content: {
+          ...content,
+          action: "propose"
+        }
+      });
+    const publishAccept = () =>
+      publishTaggedJson({
+        kind: config.nostr.kinds.identityRotation,
+        secretKeyHex: nextSecretKeyHex,
+        tags: [...commonTags, ["p", currentIdentity.pubkey]],
+        createdAt,
+        content: {
+          ...content,
+          action: "accept"
+        }
+      });
+
+    let proposeResult = { ok: false };
+    let acceptResult = { ok: false };
+    let attempts = 0;
+    while (attempts < 3 && (!proposeResult.ok || !acceptResult.ok)) {
+      if (!proposeResult.ok) {
+        proposeResult = await publishPropose();
+      }
+      if (!acceptResult.ok) {
+        acceptResult = await publishAccept();
+      }
+      attempts += 1;
+      if (!proposeResult.ok || !acceptResult.ok) {
+        await delay(900 * attempts);
+      }
+    }
+    if (!proposeResult.ok || !acceptResult.ok) {
+      throw new Error("Could not fully publish this password rotation. Keep using the current password and try again.");
+    }
+    saveSession(nextSession);
+    return {
+      session: nextSession,
+      previousPubkey: currentIdentity.pubkey,
+      rotationId,
+      proposed: Boolean(proposeResult.ok),
+      accepted: Boolean(acceptResult.ok)
+    };
+  }
+
   async function deriveSecretKeyHex(username, password) {
     const normalized = normalizeUsername(username);
     if (!normalized) throw new Error("Enter a username.");
@@ -191,6 +284,7 @@ export function createDeterministicSessionApi(config, deps) {
     getOrCreateGuestSession,
     signInWithCredentials,
     rebroadcastAccount,
+    rotateAccountCredentials,
     deriveSecretKeyHex
   };
 }
@@ -220,5 +314,6 @@ async function randomGuestId() {
 }
 
 function delay(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, Number(ms) || 0));
+  const timeout = typeof globalThis?.setTimeout === "function" ? globalThis.setTimeout.bind(globalThis) : setTimeout;
+  return new Promise((resolve) => timeout(resolve, Number(ms) || 0));
 }

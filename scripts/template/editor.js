@@ -13,6 +13,7 @@ import {
   renderEditorModalView,
   renderEditorShellView
 } from "./surfaces/editor-shell.js";
+import { applyObservedMarkup, applyObservedText } from "../core/observed-regions.js";
 
 const editorPublicStateStore = createPublicStateStore({
   getSessionSecretKey: async () => editorState.session?.secretKeyHex || "",
@@ -77,8 +78,8 @@ async function initEditorPage(force = false) {
 function renderEditorLoading(message) {
   const shell = document.querySelector("[data-editor-shell]");
   const lede = document.querySelector("[data-editor-lede]");
-  if (lede) lede.textContent = message;
-  if (shell) shell.innerHTML = renderEditorLoadingMarkup(message, { renderLoadingState });
+  applyObservedText(lede, message);
+  applyObservedMarkup(shell, renderEditorLoadingMarkup(message, { renderLoadingState }));
 }
 
 function renderEditorShell() {
@@ -95,11 +96,12 @@ function renderEditorShell() {
       escapeHtml
     }
   });
-  title.textContent = view.title;
-  lede.textContent = view.lede;
-  shell.innerHTML = view.shellMarkup;
+  const titleChanged = applyObservedText(title, view.title);
+  const ledeChanged = applyObservedText(lede, view.lede);
+  const shellChanged = applyObservedMarkup(shell, view.shellMarkup);
 
   if (!editorState.session || !currentUserIsAdmin()) return;
+  if (!shellChanged && !titleChanged && !ledeChanged && editorState.editor) return;
 
   bindEditorShell();
   renderEntityModal();
