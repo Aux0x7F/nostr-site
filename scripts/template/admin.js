@@ -27,6 +27,7 @@ import {
   uploadPublicBlob
 } from "../core/nostr.js";
 import { createPublicStateStore } from "../core/public-state-store.js";
+import { createObservedRegionRouter } from "../core/observed-regions.js";
 import { renderLoadingState } from "../core/rendering.js";
 import { getStoredSession, rebroadcastAccount, signInWithCredentials } from "../core/session.js";
 import {
@@ -80,6 +81,7 @@ const workspaceState = {
   respondedKeyRequests: new Set(),
   keyRequestCache: null
 };
+const workspaceRegions = createObservedRegionRouter();
 
 workspaceState.publicState = workspacePublicStateStore.value;
 workspacePublicStateStore.subscribe((snapshot) => {
@@ -416,7 +418,6 @@ async function hydrateInboxSubmissions() {
 }
 
 function renderWorkspace(options = {}) {
-  const soft = Boolean(options.soft);
   const shell = document.querySelector("[data-workspace-shell]");
   const title = document.querySelector("[data-workspace-title]");
   const lede = document.querySelector("[data-workspace-lede]");
@@ -426,18 +427,23 @@ function renderWorkspace(options = {}) {
     workspaceState,
     deps: surfaceDeps
   });
-  title.textContent = view.title;
-  lede.textContent = view.lede;
+  const sharedRegions = [
+    { name: "workspace-title", kind: "text", element: title, value: view.title },
+    { name: "workspace-lede", kind: "text", element: lede, value: view.lede }
+  ];
   const tabs = shell.querySelector("[data-workspace-tabs]");
   const pane = shell.querySelector("[data-workspace-pane]");
   const overlays = shell.querySelector("[data-workspace-overlays]");
 
-  if (soft && tabs && pane && overlays) {
-    tabs.innerHTML = view.tabsMarkup;
-    pane.innerHTML = view.paneMarkup;
-    overlays.innerHTML = view.overlayMarkup;
+  if (tabs && pane && overlays) {
+    workspaceRegions.apply([
+      ...sharedRegions,
+      { name: "workspace-tabs", kind: "markup", element: tabs, value: view.tabsMarkup },
+      { name: "workspace-pane", kind: "markup", element: pane, value: view.paneMarkup },
+      { name: "workspace-overlays", kind: "markup", element: overlays, value: view.overlayMarkup }
+    ]);
   } else {
-    shell.innerHTML = `
+    const shellMarkup = `
       <div class="workspace-tabs" data-workspace-tabs>
         ${view.tabsMarkup}
       </div>
@@ -448,6 +454,21 @@ function renderWorkspace(options = {}) {
         ${view.overlayMarkup}
       </div>
     `;
+    workspaceRegions.apply(sharedRegions);
+    workspaceRegions.apply(
+      [{ name: "workspace-shell", kind: "markup", element: shell, value: shellMarkup }],
+      { force: true }
+    );
+    const nextTabs = shell.querySelector("[data-workspace-tabs]");
+    const nextPane = shell.querySelector("[data-workspace-pane]");
+    const nextOverlays = shell.querySelector("[data-workspace-overlays]");
+    workspaceRegions.reset();
+    workspaceRegions.remember([
+      ...sharedRegions,
+      { name: "workspace-tabs", kind: "markup", element: nextTabs, value: view.tabsMarkup },
+      { name: "workspace-pane", kind: "markup", element: nextPane, value: view.paneMarkup },
+      { name: "workspace-overlays", kind: "markup", element: nextOverlays, value: view.overlayMarkup }
+    ]);
   }
   hydrateWorkspaceEnhancements();
 }

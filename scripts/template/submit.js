@@ -19,6 +19,7 @@ import {
   escapeHtml,
   lastCommaValue
 } from "../core/text-utils.js";
+import { applyObservedMarkup, applyObservedText } from "../core/observed-regions.js";
 import { getStoredSession } from "../core/session.js";
 import {
   renderSubmitPageView,
@@ -159,9 +160,11 @@ function renderSubmitPage() {
     submitState,
     deps: submitSurfaceDeps()
   });
-  lede.textContent = view.lede;
-  shell.innerHTML = view.shellMarkup;
-  hydrateSubmissionEnhancements();
+  const ledeChanged = applyObservedText(lede, view.lede);
+  const shellChanged = applyObservedMarkup(shell, view.shellMarkup);
+  if (ledeChanged || shellChanged) {
+    hydrateSubmissionEnhancements();
+  }
 }
 
 function workspaceOpenSubmission(submissionId) {

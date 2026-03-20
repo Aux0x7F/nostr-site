@@ -1,4 +1,15 @@
 import { buildCommentThreadState } from "./comment-state.js";
+import {
+  buildCanonicalIdentityRegistry,
+  expandCanonicalIdentityPubkeys,
+  resolveCurrentIdentityPubkey,
+  resolveCanonicalIdentityPubkey
+} from "./identity-chain.js";
+import {
+  appendUsernameConflictSuffix,
+  buildCanonicalUsernameRegistry,
+  resolveUsernameConflictOrdinal
+} from "./username-claims.js";
 
 function parseCommentObject(content) {
   try {
@@ -126,6 +137,29 @@ export function deserializePublicStateSnapshot(raw) {
   } catch {
     return null;
   }
+}
+
+export function buildLookupUsersResults(state, { matchedPubkeys = [], includePubkeys = [] } = {}) {
+  const normalizeLookupPubkey = (value) => String(value || "").trim().toLowerCase();
+  const relevantPubkeys = new Set(
+    [
+      ...(Array.isArray(matchedPubkeys) ? matchedPubkeys : []),
+      ...(Array.isArray(includePubkeys) ? includePubkeys : [])
+    ].map(normalizeLookupPubkey).filter(Boolean)
+  );
+  if (!relevantPubkeys.size) return [];
+  const visibleUsers = (Array.isArray(state?.users) ? state.users : []).filter((user) =>
+    relevantPubkeys.has(normalizeLookupPubkey(user?.pubkey))
+  );
+  const removedUsers = (Array.isArray(state?.removedUsers) ? state.removedUsers : [])
+    .filter((user) => relevantPubkeys.has(normalizeLookupPubkey(user?.pubkey)))
+    .map((user) => ({
+      ...user,
+      username: "",
+      usernameConflict: false,
+      removed: true
+    }));
+  return [...visibleUsers, ...removedUsers];
 }
 
 export function createNostrCmsClient(config) {
@@ -286,6 +320,7 @@ function isAuthorityKind(kind) {
     config?.nostr?.kinds?.adminClaim,
     config?.nostr?.kinds?.adminRole,
     config?.nostr?.kinds?.userMod,
+    config?.nostr?.kinds?.identityRotation,
     config?.nostr?.kinds?.nameClaim,
     config?.nostr?.kinds?.profile,
     config?.nostr?.kinds?.snapshotRequest,
@@ -665,7 +700,7 @@ async function loadAdminKeyShare(secretKeyHex, sitePubkey = "") {
   return shares.find((share) => share.sitePubkey === targetSitePubkey) || null;
 }
 
-async function lookupUsers(query) {
+async function lookupUsers(query, { includePubkeys = [] } = {}) {
   const raw = String(query || "").trim();
   if (!raw) return [];
   const relays = combinedAuthorityRelayList();
@@ -673,10 +708,17 @@ async function lookupUsers(query) {
   const timeoutMs = authorityConnectTimeoutMs();
   const pubkey = normalizePubkey(raw);
   const username = normalizeUsername(raw);
+  const extraPubkeys = [...new Set((Array.isArray(includePubkeys) ? includePubkeys : []).map(normalizePubkey).filter(Boolean))];
+  const lookupAuthorityKinds = [
+    config.nostr.kinds.adminClaim,
+    config.nostr.kinds.adminRole,
+    config.nostr.kinds.userMod,
+    config.nostr.kinds.identityRotation
+  ].filter((kind) => Number.isFinite(Number(kind)));
   let events = [];
 
   if (isHex64(pubkey)) {
-    events = await queryEvents(
+    const identityEvents = await queryEvents(
       [
         {
           kinds: [config.nostr.kinds.nameClaim, config.nostr.kinds.profile],
@@ -687,6 +729,19 @@ async function lookupUsers(query) {
       ],
       { relays, timeoutMs }
     );
+    const authorityEvents = lookupAuthorityKinds.length
+      ? await queryEvents(
+          [
+            {
+              kinds: lookupAuthorityKinds,
+              "#t": [config.nostr.appTag],
+              limit: 160
+            }
+          ],
+          { relays, timeoutMs }
+        )
+      : [];
+    events = [...identityEvents, ...authorityEvents];
   } else if (username) {
     const claimEvents = await queryEvents(
       [
@@ -699,7 +754,24 @@ async function lookupUsers(query) {
       ],
       { relays, timeoutMs }
     );
-    const pubkeys = [...new Set(claimEvents.map((event) => normalizePubkey(event.pubkey)).filter(Boolean))];
+    const authorIdentityEvents = extraPubkeys.length
+      ? await queryEvents(
+          [
+            {
+              kinds: [config.nostr.kinds.nameClaim, config.nostr.kinds.profile],
+              authors: extraPubkeys,
+              "#t": [config.nostr.appTag],
+              limit: Math.max(12, extraPubkeys.length * 4)
+            }
+          ],
+          { relays, timeoutMs }
+        )
+      : [];
+    const pubkeys = [...new Set([
+      ...claimEvents.map((event) => normalizePubkey(event.pubkey)).filter(Boolean),
+      ...authorIdentityEvents.map((event) => normalizePubkey(event.pubkey)).filter(Boolean),
+      ...extraPubkeys
+    ])];
     const profileEvents = pubkeys.length
       ? await queryEvents(
           [
@@ -713,13 +785,28 @@ async function lookupUsers(query) {
           { relays, timeoutMs }
         )
       : [];
-    events = [...claimEvents, ...profileEvents];
+    const authorityEvents = lookupAuthorityKinds.length
+      ? await queryEvents(
+          [
+            {
+              kinds: lookupAuthorityKinds,
+              "#t": [config.nostr.appTag],
+              limit: 160
+            }
+          ],
+          { relays, timeoutMs }
+        )
+      : [];
+    events = [...claimEvents, ...authorIdentityEvents, ...profileEvents, ...authorityEvents];
   }
 
   const matchedPubkeys = new Set(events.map((event) => normalizePubkey(event.pubkey)).filter(Boolean));
   if (!matchedPubkeys.size) return [];
   const state = buildPublicState(events, []);
-  return state.users.filter((user) => matchedPubkeys.has(user.pubkey));
+  return buildLookupUsersResults(state, {
+    matchedPubkeys: [...matchedPubkeys.values()],
+    includePubkeys: isHex64(pubkey) ? [...extraPubkeys, pubkey] : extraPubkeys
+  });
 }
 
 async function loadUserSubmissions(secretKeyHex) {
@@ -876,6 +963,7 @@ async function fetchPublicState() {
           config.nostr.kinds.adminClaim,
           config.nostr.kinds.adminRole,
           config.nostr.kinds.userMod,
+          config.nostr.kinds.identityRotation,
           config.nostr.kinds.snapshotRequest,
           config.nostr.kinds.adminKeyRequest,
           config.nostr.kinds.siteKey
@@ -980,6 +1068,7 @@ function buildPublicState(events, seedEntities = []) {
   const adminKeyRequestEvents = [];
   const siteKeyEvents = [];
   const adminKeyShareEvents = new Map();
+  const identityRotationEvents = [];
   const nameClaims = new Map();
   const profiles = new Map();
   const entities = new Map();
@@ -1084,7 +1173,7 @@ function buildPublicState(events, seedEntities = []) {
         id: event.id,
         _event: event
       };
-      if (next.username) mergeLatest(nameClaims, next.pubkey, next);
+      if (next.username) mergeEarliest(nameClaims, next.pubkey, next);
       continue;
     }
 
@@ -1151,6 +1240,26 @@ function buildPublicState(events, seedEntities = []) {
         created_at: toUnix(event.created_at),
         id: event.id
       });
+      continue;
+    }
+
+    if (kind === config.nostr.kinds.identityRotation) {
+      const payload = parseObject(event.content);
+      const action = String(payload?.action || firstTag(event, "op") || "").trim().toLowerCase();
+      const oldPubkey = normalizePubkey(payload?.old_pubkey || firstTag(event, "from") || "");
+      const newPubkey = normalizePubkey(payload?.new_pubkey || firstTag(event, "to") || firstTag(event, "p") || "");
+      if ((action === "propose" || action === "accept") && isHex64(oldPubkey) && isHex64(newPubkey) && oldPubkey !== newPubkey) {
+        identityRotationEvents.push({
+          pubkey: normalizePubkey(event.pubkey),
+          action,
+          old_pubkey: oldPubkey,
+          new_pubkey: newPubkey,
+          rotation_id: String(payload?.rotation_id || firstTag(event, "d") || event.id).trim(),
+          created_at: toUnix(event.created_at),
+          id: event.id,
+          _event: event
+        });
+      }
       continue;
     }
 
@@ -1325,6 +1434,7 @@ function buildPublicState(events, seedEntities = []) {
   const admins = new Set(adminState.admins);
   const siteInfo = computeSiteInfo(siteKeyEvents, admins);
   const moderation = computeLatestModeration(userModEvents, admins);
+  const removedPubkeys = removedPubkeysFromModeration(moderation);
   const commentModeration = computeCommentModeration(commentModEvents, admins);
   const commentVotes = computeCommentVotes(commentVoteEvents);
   const submissionStatuses = computeSubmissionStatuses(submissionStatusEvents, admins);
@@ -1333,7 +1443,7 @@ function buildPublicState(events, seedEntities = []) {
     adminKeyShareEvents,
     admins,
     siteInfo.activePubkey
-  );
+  ).filter((entry) => !removedPubkeys.has(normalizePubkey(entry?.requester_pubkey)));
   const draftHistoryBySlug = new Map();
   const draftList = [...draftEventsBySlug.entries()]
     .map(([slug, revisions]) => {
@@ -1345,6 +1455,7 @@ function buildPublicState(events, seedEntities = []) {
         revisionCount: ordered.length
       };
     })
+    .filter((draft) => !removedPubkeys.has(normalizePubkey(draft?.author)))
     .sort((left, right) => compareEventDesc(left._event, right._event));
 
   const mergedEntities = new Map();
@@ -1356,6 +1467,7 @@ function buildPublicState(events, seedEntities = []) {
   }
 
   const entityList = [...mergedEntities.values()]
+    .filter((entity) => !removedPubkeys.has(normalizePubkey(entity?.author)))
     .map((entity) => ({
       ...entity,
       status: entity.status || (admins.has(entity.author) ? "approved" : "pending")
@@ -1363,6 +1475,7 @@ function buildPublicState(events, seedEntities = []) {
     .sort((left, right) => left.name.localeCompare(right.name));
 
   const allComments = [...comments.values()]
+    .filter((comment) => !removedPubkeys.has(normalizePubkey(comment?.author)))
     .map((comment) => {
       const mod = commentModeration.get(comment.id) || null;
       const votes = commentVotes.get(comment.id) || emptyCommentVoteSummary();
@@ -1384,13 +1497,35 @@ function buildPublicState(events, seedEntities = []) {
 
   const submissionCountByAuthor = new Map();
   for (const entry of submissionCounters.values()) {
+    if (removedPubkeys.has(normalizePubkey(entry?.author))) continue;
     submissionCountByAuthor.set(
       entry.author,
       (submissionCountByAuthor.get(entry.author) || 0) + 1
     );
   }
-  const visitMetrics = computeVisitMetrics(visitEvents);
+  const visitMetrics = computeVisitMetrics(
+    visitEvents.filter((event) => !removedPubkeys.has(normalizePubkey(event?.pubkey)))
+  );
   const latestSnapshot = computeLatestSnapshot(snapshotEvents);
+  const identityChain = buildCanonicalIdentityRegistry({
+    rotationEvents: identityRotationEvents
+  });
+
+  const removedUsers = [...removedPubkeys.values()]
+    .map((pubkey) => {
+      const claim = nameClaims.get(pubkey) || null;
+      const profile = profiles.get(pubkey) || null;
+      const mod = moderation.get(pubkey) || null;
+      const claimedUsername = claim?.username || profile?.username || "";
+      const displayName = profile?.display_name || claimedUsername || shortKey(pubkey);
+      return {
+        pubkey,
+        claimedUsername,
+        displayName,
+        moderation: mod
+      };
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 
   const allPubkeys = new Set([
     ...seenPubkeys,
@@ -1401,27 +1536,83 @@ function buildPublicState(events, seedEntities = []) {
     ...commentsByAuthor.keys(),
     ...admins
   ]);
+  for (const pubkey of removedPubkeys.values()) {
+    allPubkeys.delete(pubkey);
+  }
 
-  const users = [...allPubkeys.values()]
+  const usernameRegistry = buildCanonicalUsernameRegistry({
+    nameClaims,
+    profiles,
+    pubkeys: [...allPubkeys.values()],
+    ignoredPubkeys: [...removedPubkeys.values()],
+    identityChain
+  });
+  const usernameCollisions = [...usernameRegistry.values()]
+    .filter((entry) => entry.conflict)
+    .sort((left, right) => left.username.localeCompare(right.username));
+
+  const currentIdentityPubkeys = [...new Set(
+    [...allPubkeys.values()]
+      .filter(Boolean)
+      .map((pubkey) => normalizePubkey(resolveCurrentIdentityPubkey(identityChain, pubkey) || pubkey))
+      .filter(Boolean)
+  )];
+  const users = currentIdentityPubkeys
     .filter(Boolean)
     .map((pubkey) => {
-      const claim = nameClaims.get(pubkey);
-      const profile = profiles.get(pubkey);
-      const mod = moderation.get(pubkey) || null;
-      const username = claim?.username || profile?.username || "";
-      const displayName = profile?.display_name || username || shortKey(pubkey);
+      const identityMembers = expandCanonicalIdentityPubkeys(identityChain, pubkey);
+      const canonicalPubkey = normalizePubkey(resolveCanonicalIdentityPubkey(identityChain, pubkey) || pubkey);
+      const claim =
+        nameClaims.get(pubkey) ||
+        identityMembers.map((member) => nameClaims.get(member)).find(Boolean) ||
+        null;
+      const profile =
+        profiles.get(pubkey) ||
+        identityMembers.map((member) => profiles.get(member)).find(Boolean) ||
+        null;
+      const mod =
+        moderation.get(pubkey) ||
+        identityMembers.map((member) => moderation.get(member)).find(Boolean) ||
+        null;
+      const claimedUsername = claim?.username || profile?.username || "";
+      const usernameEntry = claimedUsername ? usernameRegistry.get(claimedUsername) || null : null;
+      const usernameConflict = Boolean(
+        claimedUsername &&
+        usernameEntry &&
+        normalizePubkey(usernameEntry.owner_pubkey) !== canonicalPubkey
+      );
+      const username = usernameConflict ? "" : claimedUsername;
+      const baseDisplayName = profile?.display_name || claimedUsername || shortKey(pubkey);
+      const usernameConflictOrdinal = usernameConflict ? resolveUsernameConflictOrdinal(usernameEntry, pubkey) : 0;
+      const displayName = usernameConflict
+        ? appendUsernameConflictSuffix(baseDisplayName, usernameConflictOrdinal)
+        : baseDisplayName;
       return {
         pubkey,
         username,
+        claimedUsername,
+        usernameConflict,
+        usernameConflictOrdinal,
+        usernameOwnerPubkey: usernameEntry?.owner_pubkey || "",
         displayName,
         avatarUrl: profile?.avatar_url || "",
         avatarBlob: profile?.avatar_blob || null,
         bio: profile?.bio || "",
         socialLinks: Array.isArray(profile?.social_links) ? profile.social_links : [],
-        isAdmin: admins.has(pubkey),
+        identityCanonicalPubkey: canonicalPubkey,
+        identityCurrentPubkey: pubkey,
+        identityMemberPubkeys: identityMembers,
+        identityIsCurrent: true,
+        isAdmin: identityMembers.some((member) => admins.has(member)),
         moderation: mod,
-        submissionCount: submissionCountByAuthor.get(pubkey) || 0,
-        commentCount: (commentsByAuthor.get(pubkey) || []).length
+        submissionCount: identityMembers.reduce(
+          (total, member) => total + (submissionCountByAuthor.get(member) || 0),
+          0
+        ),
+        commentCount: identityMembers.reduce(
+          (total, member) => total + ((commentsByAuthor.get(member) || []).length),
+          0
+        )
       };
     })
     .sort((left, right) => {
@@ -1435,7 +1626,12 @@ function buildPublicState(events, seedEntities = []) {
     rootAdminPubkey: adminState.rootAdminPubkey,
     admins: adminState.admins,
     siteInfo,
+    identityChain,
     moderation,
+    removedPubkeys: [...removedPubkeys.values()].sort(),
+    removedUsers,
+    usernameRegistry: [...usernameRegistry.values()].sort((left, right) => left.username.localeCompare(right.username)),
+    usernameCollisions,
     users,
     entities: entityList,
     approvedEntities: entityList.filter((entity) => entity.status === "approved"),
@@ -1463,13 +1659,15 @@ function buildPublicState(events, seedEntities = []) {
     visits: visitMetrics.events,
     metrics: {
       userCount: users.length,
+      usernameCollisionCount: usernameCollisions.length,
       adminCount: adminState.admins.length,
-      submissionCount: submissionCounters.size,
+      submissionCount: [...submissionCounters.values()].filter((entry) => !removedPubkeys.has(normalizePubkey(entry?.author))).length,
       commentCount: visibleComments.length,
       hiddenCommentCount: hiddenComments.length,
       entityCount: entityList.length,
       approvedEntityCount: entityList.filter((entity) => entity.status === "approved").length,
       snapshotCount: snapshotEvents.length,
+      identityRotationCount: identityChain.validLinks.length,
       visitorCount24h: visitMetrics.visitorCount24h,
       visitorCount7d: visitMetrics.visitorCount7d,
       visitEventCount7d: visitMetrics.visitEventCount7d
@@ -1542,6 +1740,16 @@ function computeLatestModeration(events, admins) {
     });
   }
   return map;
+}
+
+function removedPubkeysFromModeration(moderation) {
+  const removed = new Set();
+  for (const [pubkey, entry] of moderation instanceof Map ? moderation.entries() : []) {
+    if (String(entry?.action || "").trim().toLowerCase() === "removed") {
+      removed.add(normalizePubkey(pubkey));
+    }
+  }
+  return removed;
 }
 
 function computeCommentModeration(events, admins) {
@@ -1700,7 +1908,17 @@ function emptyPublicState(error, seedEntities = []) {
       latestEvent: null,
       events: []
     },
+    identityChain: {
+      validLinks: [],
+      pendingLinks: [],
+      predecessorByPubkey: new Map(),
+      successorByPubkey: new Map(),
+      canonicalByPubkey: new Map(),
+      membersByCanonical: new Map()
+    },
     moderation: new Map(),
+    removedPubkeys: [],
+    removedUsers: [],
     users: [],
     entities,
     approvedEntities,
@@ -1735,6 +1953,7 @@ function emptyPublicState(error, seedEntities = []) {
       entityCount: entities.length,
       approvedEntityCount: approvedEntities.length,
       snapshotCount: 0,
+      identityRotationCount: 0,
       visitorCount24h: 0,
       visitorCount7d: 0,
       visitEventCount7d: 0
@@ -1907,6 +2126,7 @@ function repairEventPriority(event) {
   const kind = Number(event?.kind);
   if (kind === config?.nostr?.kinds?.siteKey) return 6;
   if (kind === config?.nostr?.kinds?.adminClaim || kind === config?.nostr?.kinds?.adminRole) return 5;
+  if (kind === config?.nostr?.kinds?.identityRotation) return 5;
   if (kind === config?.nostr?.kinds?.nameClaim || kind === config?.nostr?.kinds?.profile) return 4;
   if (kind === config?.nostr?.kinds?.entity || kind === config?.nostr?.kinds?.draft) return 3;
   if (kind === config?.nostr?.kinds?.comment || kind === config?.nostr?.kinds?.commentMod) return 2;
@@ -2091,6 +2311,13 @@ function withAppTag(tags) {
 function mergeLatest(map, key, next) {
   const current = map.get(key);
   if (!current || compareEventDesc(next._event, current._event) < 0) {
+    map.set(key, next);
+  }
+}
+
+function mergeEarliest(map, key, next) {
+  const current = map.get(key);
+  if (!current || compareEventAsc(next._event, current._event) < 0) {
     map.set(key, next);
   }
 }

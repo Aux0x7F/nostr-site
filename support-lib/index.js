@@ -5,6 +5,13 @@ export { createNostrCrdtBridge } from "../portable/crdt-transport.js";
 export { createStaticPageOverlayApi } from "../portable/static-page-overlay.js";
 export { createStructuredUnitOverlayApi } from "../portable/structured-unit-overlay.js";
 export {
+  buildCanonicalIdentityRegistry,
+  resolveCurrentIdentityPubkey,
+  identityPubkeyIsCurrent,
+  resolveCanonicalIdentityPubkey,
+  expandCanonicalIdentityPubkeys
+} from "../portable/identity-chain.js";
+export {
   buildCommentThreadState,
   compareCommentRepliesChronologically,
   compareCommentRootsByScore

@@ -6,6 +6,13 @@ The goal is to make downstream sites extend stable primitives instead of re-solv
 
 Whole UI families should converge into reusable surface modules before they are copied into more page controllers. Route-owned orchestration should move into `scripts/template/features`, and shared state/controllers should stay in `scripts/core`.
 
+## Feature-owned roots
+
+- Shared state should route into feature-owned roots, then into the component regions those features own.
+- Mounted shells should update by observed region instead of replacing the whole shell on every state change.
+- Unrelated state changes must not reset active form input, open modals, or other local draft UI.
+- Local draft UI state and async network/public state should be treated as separate concerns.
+
 ## Global shell
 
 ### Header and navigation
@@ -74,7 +81,7 @@ All reusable live surfaces should follow:
 1. static baseline
 2. cached live state if trustworthy
 3. background reconcile
-4. patch in place
+4. patch in place through the owning feature or component root
 
 This applies to:
 
@@ -91,6 +98,7 @@ This applies to:
 - template workspace panes should converge on shared list and rail behavior before downstream sites customize them
 - rails own search, stats, and filters when they drive the list
 - refresh should patch rows and counts in place instead of replacing the whole pane
+- mounted workspace shells should patch tabs, pane, and overlays independently when only one region changes
 
 ### Notifications and profile menu
 
@@ -112,6 +120,7 @@ This applies to:
   - collaboration or discussion rail
 - toolbar actions belong in the toolbar, at cursor
 - the shell stays mounted during background repair and sync
+- editor shell replacement should only happen when the shell markup actually changes
 
 ## Compliance rule
 

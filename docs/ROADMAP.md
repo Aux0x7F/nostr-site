@@ -17,6 +17,7 @@
 - Submit-shell rendering now lives in a dedicated template surface module, so the modal family matches the rest of the extracted surface split.
 - Workspace picker and filter suggestion markup now live in dedicated template surface modules instead of staying embedded in admin controllers.
 - The template root controller is now reduced to a route/bootstrap entrypoint backed by explicit `scripts/core`, `scripts/template/features`, and `scripts/template/surfaces` layers.
+- Shared observed-region routing now governs mounted workspace/admin, submit, and editor shell updates so unrelated async state changes do not replace active form roots.
 
 ## Next Tightening Step
 

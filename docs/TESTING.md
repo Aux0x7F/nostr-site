@@ -9,6 +9,7 @@ Any change that affects live state, cached state, or public rendering should hav
 - a deterministic unit test for the data contract
 - a focused feature/runtime test when route-owned logic moves out of a root controller
 - a focused surface test when a render family moves out of a page controller
+- a controller or browser regression when the failure mode is an unrelated rerender wiping active local input state
 - a syntax/build pass
 - a note about which surface behavior was validated
 - a compatibility note when introducing non-baseline browser features
@@ -23,6 +24,8 @@ Where applicable, tests should cover:
 - stable identifiers across publish and reload
 - hierarchy preservation for nested data
 - visible control effect after local mutation when the change affects local interactive state
+- session/account integrity rules such as username-claim collision handling
+- signed identity-removal handling, including ownership exclusion and filtered projections
 
 ## Preferred test split
 
@@ -39,6 +42,7 @@ See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback ex
 - `node --test test/archive-surface.test.mjs`
 - `node --test test/shell-surfaces.test.mjs`
 - `node --test test/public-state-store.test.mjs`
+- `node --test test/observed-regions.test.mjs`
 - `node --test test/navigation-notification.test.mjs`
 - `node --test test/public-state-store.test.mjs`
 - `node --test test/workspace-actions.test.mjs`

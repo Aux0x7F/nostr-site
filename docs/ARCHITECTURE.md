@@ -24,6 +24,7 @@ The three-repo split is:
 Today, `nostr-site` already provides:
 
 - deterministic accounts
+- earliest-claim username ownership with collision detection
 - admin grant and revoke model
 - public drafts, entities, comments, and moderation state
 - encrypted submission intake
@@ -61,6 +62,13 @@ The reusable surface and compatibility expectations that should govern that work
 
 The concrete template and downstream sites should keep moving toward a `scripts/core -> scripts/template/features -> scripts/template/surfaces` split, where shared services live in core, route-owned logic lives in features, and UI families live in surfaces instead of accumulating inside page controllers. The template now applies that directly for site runtime/bootstrap, content pages, post detail, navigation, archive, comments, submit shell rendering, workspace rendering, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
 
+Mounted shell updates should now follow an observed-region rule:
+
+- features observe the state slices they care about
+- features route updates to the specific DOM regions they own
+- unchanged overlays and active form roots stay mounted
+- full shell replacement is reserved for actual structural changes
+
 ## Cache-first live state contract
 
 Every live surface in the framework must follow the same boot order:
@@ -68,9 +76,11 @@ Every live surface in the framework must follow the same boot order:
 1. render static baseline if available
 2. render cached live state immediately if a trustworthy cache exists
 3. reconcile against relays in the background
-4. patch the mounted surface in place
+4. patch the mounted surface in place through the owning feature or region root
 
 Live surfaces must not blank useful cached content just because a network refresh is in flight.
+
+Async network state and local draft UI state should stay separate. Background refresh must not wipe active input that does not depend on the changed state.
 
 This applies to:
 
@@ -117,6 +127,10 @@ The trust rule is:
 - only updates from currently trusted signers are applied to privileged live overlay state
 
 This is a host-app concern, not a transport concern.
+
+For deterministic accounts, `nostr-site` also establishes canonical username ownership from the earliest explicit claim and marks later same-name claimants as conflicts. Host applications can use that derived state to block conflicted sessions from acting until they choose a unique username, and to verify ownership against a direct username lookup before persisting a session locally.
+
+`nostr-site` also supports a stronger signed moderation state for identities labeled `removed`. Removed pubkeys should be excluded from normal user/entity/comment projections and from username-ownership resolution, while still allowing host applications to treat that pubkey as explicitly removed for session validation and operator handling. This is intended as an operator/root-level action, not a normal workspace control.
 
 ## Peer pinner role
 
