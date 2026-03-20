@@ -162,6 +162,53 @@ test("deterministic session api publishes a paired password rotation and saves t
   assert.equal(api.getStoredSession().pubkey, result.session.pubkey);
 });
 
+test("deterministic session api can derive login and rotation sessions without persisting them", async () => {
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) || null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: (key) => storage.delete(key)
+  };
+
+  const api = createDeterministicSessionApi(
+    {
+      nostr: {
+        storageNamespace: "nostr-site.test",
+        appTag: "nostr-site",
+        kinds: {
+          profile: 1,
+          nameClaim: 2,
+          identityRotation: 3
+        }
+      }
+    },
+    {
+      deriveIdentity: (secretKeyHex) => ({
+        pubkey: secretKeyHex.slice(0, 64)
+      }),
+      ensureEventToolsLoaded: async () => {},
+      normalizeUsername: (value) => String(value || "").trim().toLowerCase(),
+      publishTaggedJson: async () => ({ ok: true, event: { id: "1" } })
+    }
+  );
+
+  const signInSession = await api.signInWithCredentials("aux", "secret", { persistSession: false });
+  assert.equal(api.getStoredSession(), null);
+
+  const rotation = await api.rotateAccountCredentials(
+    {
+      username: "aux",
+      secretKeyHex: signInSession.secretKeyHex,
+      pubkey: signInSession.pubkey
+    },
+    "new-password",
+    { persistSession: false }
+  );
+
+  assert.equal(api.getStoredSession(), null);
+  assert.notEqual(rotation.session.pubkey, signInSession.pubkey);
+});
+
 test("deterministic session api does not save a partially published password rotation", async () => {
   const storage = new Map();
   globalThis.localStorage = {

@@ -90,7 +90,9 @@ export function createDeterministicSessionApi(config, deps) {
     if (typeof options?.validateSession === "function") {
       await options.validateSession(session);
     }
-    saveSession(session);
+    if (options?.persistSession !== false) {
+      saveSession(session);
+    }
     return session;
   }
 
@@ -245,7 +247,9 @@ export function createDeterministicSessionApi(config, deps) {
     if (!proposeResult.ok || !acceptResult.ok) {
       throw new Error("Could not fully publish this password rotation. Keep using the current password and try again.");
     }
-    saveSession(nextSession);
+    if (options?.persistSession !== false) {
+      saveSession(nextSession);
+    }
     return {
       session: nextSession,
       previousPubkey: currentIdentity.pubkey,
