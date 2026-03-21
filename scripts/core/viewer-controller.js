@@ -62,6 +62,10 @@ export function createViewerController({
     return String(primeFromSession(false)?.pubkey || "").trim();
   }
 
+  function resolvedSessionPubkey({ deriveWhenAvailable = false } = {}) {
+    return String(primeFromSession(Boolean(deriveWhenAvailable))?.pubkey || "").trim();
+  }
+
   function trustedPubkeys(publicState) {
     const admins = new Set(Array.isArray(publicState?.admins) ? publicState.admins : []);
     const rootAdminPubkey = String(publicState?.rootAdminPubkey || site?.nostr?.rootAdminPubkey || "").trim();
@@ -71,7 +75,7 @@ export function createViewerController({
 
   function canEdit(publicState) {
     if (!state.session) return false;
-    const viewerPubkey = sessionPubkey();
+    const viewerPubkey = resolvedSessionPubkey({ deriveWhenAvailable: hasNostrTools() });
     if (!viewerPubkey) return false;
     return trustedPubkeys(publicState).includes(viewerPubkey);
   }
@@ -79,6 +83,7 @@ export function createViewerController({
   return {
     get,
     primeFromSession,
+    resolvedSessionPubkey,
     sessionPubkey,
     trustedPubkeys,
     canEdit
