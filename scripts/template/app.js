@@ -40,11 +40,11 @@ import {
   normalizeDraftStatus
 } from "../core/draft-review.js";
 import { getStoredGuestSession, getStoredSession, saveSession } from "../core/session.js";
+import { createQueryState } from "../core/query-state.js";
 import {
   bindMapEntityCards as bindMapSurfaceEntityCards,
   renderLeafletMapSurface,
   renderMapPageSurface,
-  requestedMapEntity,
   scheduleMapEntityFocus as scheduleSurfaceMapEntityFocus
 } from "./surfaces/map.js";
 import { renderPostCard } from "./surfaces/archive.js";
@@ -67,6 +67,7 @@ const NAV_KEYS = {
 };
 
 const navigationUi = createNavigationUiState();
+const queryState = createQueryState();
 let appRuntime = null;
 
 const publicStateStore = createPublicStateStore({
@@ -175,11 +176,11 @@ const mapPageFeature = createMapPageFeature({
   state,
   postsStore,
   getPublicState: (force) => appRuntime.getPublicState(force),
+  queryState,
   collectEntityRefsFromText,
   renderMapPageSurface,
   renderLeafletMapSurface,
   bindMapEntityCards: bindMapSurfaceEntityCards,
-  requestedMapEntity,
   scheduleLeafletFocus: scheduleSurfaceMapEntityFocus,
   cleanSlug,
   renderError,

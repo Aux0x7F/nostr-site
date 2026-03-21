@@ -82,6 +82,13 @@ Mounted shell updates should now follow an observed-region rule:
 - unchanged overlays and active form roots stay mounted
 - full shell replacement is reserved for actual structural changes
 
+Route query params should use the same architecture:
+
+- shared query-state helper in `scripts/core`
+- features subscribe only to the params they consume
+- features route param changes to the DOM regions they own
+- page controllers should not keep reintroducing direct `window.location.search` reads for mounted interactive behavior
+
 ## Cache-first live state contract
 
 Every live surface in the framework must follow the same boot order:
