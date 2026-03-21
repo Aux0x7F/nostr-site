@@ -49,6 +49,7 @@ import {
   renderLocationResultsMarkup
 } from "./surfaces/workspace-filters.js";
 import { renderWorkspaceView } from "./surfaces/workspace.js";
+import { createWorkspaceAccountController } from "./features/workspace-account.js";
 
 const workspacePublicStateStore = createPublicStateStore({
   getSessionSecretKey: async () => workspaceState.session?.secretKeyHex || "",
@@ -86,6 +87,19 @@ const workspaceRegions = createObservedRegionRouter();
 workspaceState.publicState = workspacePublicStateStore.value;
 workspacePublicStateStore.subscribe((snapshot) => {
   workspaceState.publicState = snapshot.value;
+});
+
+const workspaceAccount = createWorkspaceAccountController({
+  state: workspaceState,
+  deps: {
+    rebroadcastAccount,
+    signInWithCredentials,
+    uploadPublicBlob
+  },
+  callbacks: {
+    currentUser,
+    refreshWorkspace
+  }
 });
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -210,11 +224,11 @@ function bindWorkspace() {
     event.preventDefault();
 
     if (form.matches("[data-login-form]")) {
-      await handleLogin(form);
+      await workspaceAccount.handleLogin(form);
       return;
     }
     if (form.matches("[data-profile-form]")) {
-      await handleProfileSave(form);
+      await workspaceAccount.handleProfileSave(form);
       return;
     }
     if (form.matches("[data-entity-form]")) {
@@ -609,82 +623,6 @@ function reviewedDraftAction(draft) {
   return String(draft?.status || "").trim().toLowerCase() === "revision"
     ? "Open draft"
     : "Open preview";
-}
-
-async function handleLogin(form) {
-  const status = form.querySelector("[data-workspace-status]");
-  const submitButton = form.querySelector("[data-login-submit]");
-  try {
-    setLoginPending(submitButton, true);
-    if (status) {
-      status.textContent = "Opening account...";
-      status.dataset.state = "pending";
-    }
-    const formData = new FormData(form);
-    const session = await signInWithCredentials(formData.get("username"), formData.get("password"));
-    await rebroadcastAccount(session);
-    if (status) {
-      status.textContent = `Signed in as @${session.username}.`;
-      status.dataset.state = "success";
-    }
-    await refreshWorkspace(true);
-  } catch (error) {
-    if (status) {
-      status.textContent = String(error?.message || error || "Login failed.");
-      status.dataset.state = "error";
-    }
-  } finally {
-    setLoginPending(submitButton, false);
-  }
-}
-
-function setLoginPending(button, pending) {
-  if (!(button instanceof HTMLButtonElement)) return;
-  button.disabled = pending;
-  button.dataset.busy = pending ? "yes" : "no";
-  button.innerHTML = pending
-    ? `<span class="loading-spinner" aria-hidden="true"></span><span>Opening account...</span>`
-    : "Create/Login";
-}
-
-async function handleProfileSave(form) {
-  const status = form.querySelector("[data-workspace-status]");
-  try {
-    const formData = new FormData(form);
-    const current = currentUser();
-    let avatarUrl = String(current?.avatarUrl || "").trim();
-    let avatarBlob = current?.avatarBlob || null;
-    const avatarFile = formData.get("avatarFile");
-    if (avatarFile instanceof File && avatarFile.size > 0) {
-      const upload = await uploadPublicBlob(
-        workspaceState.session.secretKeyHex,
-        avatarFile,
-        { purpose: "avatar" }
-      );
-      avatarUrl = upload.url;
-      avatarBlob = upload;
-    }
-    await rebroadcastAccount(workspaceState.session, {
-      displayName: formData.get("displayName"),
-      avatarUrl,
-      avatarBlob,
-      bio: formData.get("bio"),
-      socialLinks: String(formData.get("socialLinks") || "")
-        .split(/\r?\n/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    });
-    if (status) {
-      status.textContent = "Profile updated.";
-      status.dataset.state = "success";
-    }
-    await refreshWorkspace(true);
-  } catch (error) {
-    if (status) {
-      status.textContent = String(error?.message || error || "Profile save failed.");
-      status.dataset.state = "error";
-    }
-  }
 }
 
 async function handleAttachmentDownload(button) {

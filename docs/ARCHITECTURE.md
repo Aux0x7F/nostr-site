@@ -36,10 +36,16 @@ Today, `nostr-site` already provides:
 - cached public-event replay and peer-assisted repair requests for partial relay reads, limited to locally verified signed events
 - generic comment vote aggregation in public state
 - reusable trusted HTML sanitization helpers for host renderers
+- shared evidence-graph and wiki helpers:
+  - entity normalization
+  - relationship normalization
+  - graph build/filter/highlight helpers
+  - wiki-view derivation for host rails and entity pages
 
 Today, `nostr-site` does not yet provide:
 
 - a full template-level consumer for every collaborative unit type
+- a generic template-level graph explorer or wiki route shell
 
 ## Target model
 
@@ -60,7 +66,14 @@ The reusable surface and compatibility expectations that should govern that work
 - `STYLE_GUIDE.md`
 - `BROWSER_SUPPORT.md`
 
-The concrete template and downstream sites should keep moving toward a `scripts/core -> scripts/template/features -> scripts/template/surfaces` split, where shared services live in core, route-owned logic lives in features, and UI families live in surfaces instead of accumulating inside page controllers. The template now applies that directly for site runtime/bootstrap, content pages, post detail, navigation, archive, comments, submit shell rendering, workspace rendering, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
+The concrete template and downstream sites should keep moving toward a `scripts/core -> scripts/template/features -> scripts/template/surfaces` split, where shared services live in core, route-owned logic lives in features, and UI families live in surfaces instead of accumulating inside page controllers. The template now applies that directly for site runtime/bootstrap, content pages, post detail, navigation, archive, comments, submit shell rendering, workspace rendering, workspace account flows, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
+
+Graph/wiki boundaries follow the same split:
+
+- `portable/graph-wiki.js`
+  - reusable evidence-graph and wiki-view helpers
+- downstream host
+  - chooses routes, visual language, draft relationship workflows, and graph/wiki shell behavior
 
 Mounted shell updates should now follow an observed-region rule:
 
@@ -68,6 +81,13 @@ Mounted shell updates should now follow an observed-region rule:
 - features route updates to the specific DOM regions they own
 - unchanged overlays and active form roots stay mounted
 - full shell replacement is reserved for actual structural changes
+
+Route query params should use the same architecture:
+
+- shared query-state helper in `scripts/core`
+- features subscribe only to the params they consume
+- features route param changes to the DOM regions they own
+- page controllers should not keep reintroducing direct `window.location.search` reads for mounted interactive behavior
 
 ## Cache-first live state contract
 

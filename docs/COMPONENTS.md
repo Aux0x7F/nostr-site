@@ -44,6 +44,17 @@ Whole UI families should converge into reusable surface modules before they are 
 - rails scroll internally when taller than the viewport
 - mobile moves control rails above the result set when they drive filtering
 
+### Graph and wiki shells
+
+- Evidence-graph search and filter rails belong to the graph-explorer surface, not to the data model.
+- Wiki rails belong to the wiki-page surface and should focus on quick info, relationships, citations, and graph navigation for the current entity.
+- The shared graph/wiki contract upstream should stay data-oriented:
+  - entity normalization
+  - relationship normalization
+  - graph build and filtering
+  - wiki-view derivation
+- Host apps decide the actual graph canvas, wiki layout, and admin drafting UI.
+
 ## Search and filter controls
 
 ### Attached field pattern
@@ -143,6 +154,7 @@ Current extracted template surface families:
 - `scripts/template/features/post-detail.js`
 - `scripts/template/features/map-page.js`
 - `scripts/core/navigation-state.js`
+- `scripts/template/features/workspace-account.js`
 - `scripts/template/surfaces/navigation.js`
 - `scripts/template/surfaces/archive.js`
 - `scripts/template/surfaces/comments.js`
@@ -152,3 +164,4 @@ Current extracted template surface families:
 - `scripts/template/surfaces/workspace-actions.js`
 - `scripts/template/surfaces/map.js`
 - `scripts/template/surfaces/editor-shell.js`
+- `portable/graph-wiki.js`

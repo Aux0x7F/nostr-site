@@ -32,11 +32,17 @@ export function parseContentDocument(raw, fallback = {}, options = {}) {
   };
 }
 
-export function enrichEntityReferences(scope, entities = []) {
+export function enrichEntityReferences(scope, entities = [], options = {}) {
   if (!scope || !entities.length) return [];
   const matches = [];
   const normalizedEntities = buildEntityMatcherList(entities);
   if (!normalizedEntities.length) return matches;
+  const hrefBuilder = typeof options.hrefBuilder === "function"
+    ? options.hrefBuilder
+    : (slug) => `./map.html?entity=${encodeURIComponent(slug)}`;
+  const tooltipBuilder = typeof options.tooltipBuilder === "function"
+    ? options.tooltipBuilder
+    : buildEntityTooltip;
 
   const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -62,9 +68,9 @@ export function enrichEntityReferences(scope, entities = []) {
       if (match.start > cursor) fragment.append(document.createTextNode((node.nodeValue || "").slice(cursor, match.start)));
       const link = document.createElement("a");
       link.className = "entity-ref entity-ref--live";
-      link.href = `./map.html?entity=${encodeURIComponent(match.entity.slug)}`;
+      link.href = String(hrefBuilder(match.entity.slug, match.entity) || `./map.html?entity=${encodeURIComponent(match.entity.slug)}`);
       link.dataset.entityRef = match.entity.slug;
-      link.dataset.entityTooltip = buildEntityTooltip(match.entity);
+      link.dataset.entityTooltip = String(tooltipBuilder(match.entity) || "");
       link.textContent = (node.nodeValue || "").slice(match.start, match.end);
       fragment.append(link);
       matches.push(match.entity.slug);

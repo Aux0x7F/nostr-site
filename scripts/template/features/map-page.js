@@ -5,31 +5,49 @@ export function createMapPageFeature({
   state,
   postsStore,
   getPublicState,
+  queryState,
   collectEntityRefsFromText,
   renderMapPageSurface,
   renderLeafletMapSurface,
   bindMapEntityCards,
-  requestedMapEntity,
   scheduleLeafletFocus,
   cleanSlug,
   renderError,
   renderLoadingState
 } = {}) {
+  let queryBound = false;
+
   async function mount() {
     const list = document.querySelector("[data-map-list]");
     const canvas = document.querySelector("[data-map-canvas]");
     if (!(list instanceof HTMLElement) || !(canvas instanceof HTMLElement)) return;
+    bindQueryState();
     list.innerHTML = renderLoadingState("Looking up map entries...");
-    canvas.innerHTML = renderLoadingState("Looking up map data...");
+    mapSurfaceDeps().renderLeafletMapSurface(canvas, []);
     const publicState = await getPublicState();
     if (!publicState.approvedEntities.length) {
       list.innerHTML = `<div class="empty-state">Published entities will appear here once approved entries are available.</div>`;
-      canvas.innerHTML = `<div class="map-empty">Map data unavailable.</div>`;
+      mapSurfaceDeps().renderLeafletMapSurface(canvas, []);
+      focusRequestedEntity();
       return;
     }
     const posts = await postsStore.load().catch(() => []);
     const entityUsage = buildEntityUsage(posts, publicState.approvedEntities, collectEntityRefsFromText);
     renderMapPageSurface(list, canvas, publicState.approvedEntities, entityUsage, mapSurfaceDeps());
+  }
+
+  function bindQueryState() {
+    if (queryBound || !queryState) return;
+    queryBound = true;
+    queryState.subscribe(["entity"], ({ entity }) => {
+      const requested = cleanSlug(entity || "");
+      if (!requested || !pageReady()) return;
+      scheduleMapEntityFocus(requested);
+    }, {
+      normalizers: {
+        entity: cleanSlug
+      }
+    });
   }
 
   function renderEntityCard(entity, posts) {
@@ -76,9 +94,13 @@ export function createMapPageFeature({
   }
 
   function focusRequestedEntity() {
-    const requested = requestedMapEntity(window.location.search, cleanSlug);
+    const requested = queryState ? queryState.get("entity", cleanSlug) : cleanSlug(new URLSearchParams(window.location.search).get("entity") || "");
     if (!requested) return;
     scheduleMapEntityFocus(requested);
+  }
+
+  function pageReady() {
+    return Boolean(document.querySelector("[data-map-shell]"));
   }
 
   return {

@@ -18,11 +18,13 @@
 - Workspace picker and filter suggestion markup now live in dedicated template surface modules instead of staying embedded in admin controllers.
 - The template root controller is now reduced to a route/bootstrap entrypoint backed by explicit `scripts/core`, `scripts/template/features`, and `scripts/template/surfaces` layers.
 - Shared observed-region routing now governs mounted workspace/admin, submit, and editor shell updates so unrelated async state changes do not replace active form roots.
+- Shared evidence-graph and wiki helpers now exist upstream for downstream graph explorer and entity wiki shells.
+- Template workspace login and profile save now live behind a dedicated workspace account controller instead of staying embedded in the template admin controller.
 
 ## Next Tightening Step
 
 - Expand the normalized template shell into richer collaborative rails, broader live-unit overlays, and stronger downstream browser validation.
-- Apply the same controller-to-feature reduction pattern to the remaining heavy admin/workspace controllers so the template no longer has one large secondary root script.
+- Apply the same controller-to-feature reduction pattern to the remaining heavy admin/workspace controllers so the template no longer has one large secondary root script, with upload/download and moderation-detail handlers now the next obvious seam.
 
 That specifically means:
 
@@ -34,6 +36,8 @@ That specifically means:
 
 ## Near Term
 
+- Decide how much of the first graph/wiki UI should become a generic template demonstration instead of staying only in downstream sites.
+- Expand graph/wiki testing around entity references, relationship qualifiers, and wiki-view derivation.
 - Extend the generic live overlay model from page units into post and entity-facing template surfaces.
 - Expand deterministic tests for cache-first restore, stale merge behavior, and nested thread integrity.
 - Expand browser smoke coverage for mobile navigation, workspace flows, and fallback behavior.
@@ -41,6 +45,6 @@ That specifically means:
 
 ## Longer Term
 
-- Add stronger entity/wiki support as a generic structured-unit target.
+- Add stronger entity/wiki support as a generic structured-unit target, including explicit relationship records and evidence-aware graph helpers.
 - Tighten collaboration shells so downstream sites can adopt richer editor rails and discussion patterns without forking the template model.
 - Keep the peer-pinner bakedown path aligned with the live collaborative unit model rather than older one-off review flows.

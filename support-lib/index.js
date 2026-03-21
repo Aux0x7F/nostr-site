@@ -29,3 +29,11 @@ export {
   sanitizeTrustedHtml,
   sanitizeUrl
 } from "../portable/html-safety.js";
+export {
+  normalizeWikiEntity,
+  normalizeWikiRelationship,
+  buildEvidenceGraph,
+  filterEvidenceGraph,
+  findGraphNodeMatches,
+  buildEntityWikiView
+} from "../portable/graph-wiki.js";
