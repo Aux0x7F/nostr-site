@@ -19,11 +19,12 @@
 - The template root controller is now reduced to a route/bootstrap entrypoint backed by explicit `scripts/core`, `scripts/template/features`, and `scripts/template/surfaces` layers.
 - Shared observed-region routing now governs mounted workspace/admin, submit, and editor shell updates so unrelated async state changes do not replace active form roots.
 - Shared evidence-graph and wiki helpers now exist upstream for downstream graph explorer and entity wiki shells.
+- Template workspace login and profile save now live behind a dedicated workspace account controller instead of staying embedded in the template admin controller.
 
 ## Next Tightening Step
 
 - Expand the normalized template shell into richer collaborative rails, broader live-unit overlays, and stronger downstream browser validation.
-- Apply the same controller-to-feature reduction pattern to the remaining heavy admin/workspace controllers so the template no longer has one large secondary root script.
+- Apply the same controller-to-feature reduction pattern to the remaining heavy admin/workspace controllers so the template no longer has one large secondary root script, with upload/download and moderation-detail handlers now the next obvious seam.
 
 That specifically means:
 

@@ -154,6 +154,7 @@ Current extracted template surface families:
 - `scripts/template/features/post-detail.js`
 - `scripts/template/features/map-page.js`
 - `scripts/core/navigation-state.js`
+- `scripts/template/features/workspace-account.js`
 - `scripts/template/surfaces/navigation.js`
 - `scripts/template/surfaces/archive.js`
 - `scripts/template/surfaces/comments.js`
