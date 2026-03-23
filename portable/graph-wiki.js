@@ -124,6 +124,7 @@ export function buildEvidenceGraph({
   relationships = [],
   draftRelationships = [],
   investigations = [],
+  draftInvestigations = [],
   viewerIsAdmin = false
 } = {}) {
   const entityMap = new Map();
@@ -137,11 +138,25 @@ export function buildEvidenceGraph({
   const normalizedInvestigations = (Array.isArray(investigations) ? investigations : [])
     .map((investigation) => normalizeInvestigation(investigation))
     .filter(Boolean);
+  const normalizedDraftInvestigations = viewerIsAdmin
+    ? (Array.isArray(draftInvestigations) ? draftInvestigations : [])
+        .map((investigation) => normalizeInvestigation(investigation, { visibility: "draft" }))
+        .filter(Boolean)
+    : [];
+
+  const derivedPublicRelationships = buildInvestigationRelationships(normalizedInvestigations, "public")
+    .filter((relationship) => entityMap.has(relationship.source) && entityMap.has(relationship.target));
+  const derivedDraftRelationships = viewerIsAdmin
+    ? buildInvestigationRelationships(normalizedDraftInvestigations, "draft")
+        .filter((relationship) => entityMap.has(relationship.source) && entityMap.has(relationship.target))
+    : [];
 
   const explicitRelationships = dedupeRelationships(
     [
       ...(Array.isArray(relationships) ? relationships : []),
-      ...(viewerIsAdmin ? Array.isArray(draftRelationships) ? draftRelationships : [] : [])
+      ...derivedPublicRelationships,
+      ...(viewerIsAdmin ? Array.isArray(draftRelationships) ? draftRelationships : [] : []),
+      ...(viewerIsAdmin ? derivedDraftRelationships : [])
     ]
       .map((relationship) => normalizeWikiRelationship(relationship))
       .filter(Boolean)
@@ -307,7 +322,7 @@ export function buildEntityWikiView(graphState, slug = "") {
   };
 }
 
-function normalizeInvestigation(investigation = {}) {
+function normalizeInvestigation(investigation = {}, { visibility = "public" } = {}) {
   const slug = cleanSlug(investigation.slug || investigation.id || investigation.title);
   if (!slug) return null;
   return {
@@ -316,10 +331,60 @@ function normalizeInvestigation(investigation = {}) {
     title: normalizeText(investigation.title || humanizeToken(slug)) || humanizeToken(slug),
     summary: normalizeText(investigation.summary || ""),
     date: normalizeText(investigation.date || ""),
+    visibility,
+    relationship_candidates: normalizeRelationshipCandidates(investigation.relationship_candidates),
     entity_refs: dedupe(investigation.entity_refs)
       .map((value) => cleanSlug(value))
       .filter(Boolean)
   };
+}
+
+function normalizeRelationshipCandidates(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((relationship) => {
+      if (!relationship || typeof relationship !== "object") return null;
+      const source = cleanSlug(relationship.source || relationship.from);
+      const target = cleanSlug(relationship.target || relationship.to);
+      const type = normalizeText(relationship.type || relationship.kind || "").toLowerCase();
+      if (!source || !target || !type) return null;
+      return {
+        source,
+        target,
+        type,
+        label: normalizeText(relationship.label || humanizeToken(type)),
+        summary: normalizeText(relationship.summary || ""),
+        weight: normalizeWeight(relationship.weight, 1.5),
+        qualifiers: Array.isArray(relationship.qualifiers) ? relationship.qualifiers : []
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildInvestigationRelationships(investigations = [], visibility = "public") {
+  const derived = [];
+  for (const investigation of Array.isArray(investigations) ? investigations : []) {
+    for (const candidate of Array.isArray(investigation.relationship_candidates) ? investigation.relationship_candidates : []) {
+      derived.push({
+        id: `investigation-rel:${investigation.slug}:${candidate.source}:${candidate.type}:${candidate.target}:${visibility}`,
+        source: candidate.source,
+        target: candidate.target,
+        type: candidate.type,
+        label: candidate.label || humanizeToken(candidate.type),
+        summary: candidate.summary || investigation.summary,
+        qualifiers: normalizeQuickFacts(candidate.qualifiers),
+        start_at: investigation.date,
+        end_at: "",
+        weight: normalizeWeight(candidate.weight, 1.5),
+        evidence: [{
+          investigation: investigation.slug,
+          note: investigation.summary,
+          quote: ""
+        }],
+        visibility
+      });
+    }
+  }
+  return derived;
 }
 
 function mergeEntity(previousEntity, nextEntity) {

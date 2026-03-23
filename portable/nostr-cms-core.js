@@ -10,6 +10,7 @@ import {
   buildCanonicalUsernameRegistry,
   resolveUsernameConflictOrdinal
 } from "./username-claims.js";
+import { createCmsCacheStorage } from "./cms-cache-storage.js";
 
 function parseCommentObject(content) {
   try {
@@ -168,13 +169,18 @@ let toolsPromise = null;
 let publicStateRepairPeer = null;
 const handledPublicStateRepairRequests = new Set();
 const publicEventVerificationCache = new Map();
+const globalScope = globalThis;
+const cacheStorage = createCmsCacheStorage({
+  namespace: config?.nostr?.storageNamespace || "nostr-site"
+});
+const cacheHydratePromise = Promise.resolve(cacheStorage.hydrate?.()).catch(() => null);
 const toolScriptPaths = {
   bundle: config?.nostr?.toolScriptPaths?.bundle || "./vendor/event-tools.bundle.js",
   shim: config?.nostr?.toolScriptPaths?.shim || "./vendor/event-tools-shim.js"
 };
 
 function getEventTools() {
-  return window.EventTools || window[["No", "strTools"].join("")] || null;
+  return globalScope.EventTools || globalScope[["No", "strTools"].join("")] || null;
 }
 
 function hasNostrTools() {
@@ -216,7 +222,15 @@ function ensureEventToolsLoaded() {
   if (toolsPromise) return toolsPromise;
 
   toolsPromise = loadScript(toolScriptPaths.bundle)
-    .then(() => loadScript(toolScriptPaths.shim))
+    .then(() => {
+      if (!getEventTools() && globalScope[["No", "strTools"].join("")]) {
+        globalScope.EventTools = globalScope[["No", "strTools"].join("")];
+      }
+      if (typeof document !== "undefined") {
+        return loadScript(toolScriptPaths.shim);
+      }
+      return null;
+    })
     .then(() => {
       const tools = getEventTools();
       if (!tools) throw new Error("Event tools failed to initialize.");
@@ -352,6 +366,7 @@ async function generateSecretKeyHex() {
 }
 
 async function loadPublicState(force = false) {
+  await cacheHydratePromise;
   if (!force && publicStatePromise) return publicStatePromise;
   publicStatePromise = fetchPublicState().finally(() => {
     publicStatePromise = null;
@@ -1986,31 +2001,27 @@ function withPublicStateSyncInfo(publicState, info = {}) {
 }
 
 function loadCachedPublicEvents() {
-  try {
-    const raw = window.localStorage.getItem(publicEventCacheKey());
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(normalizeCachedPublicEvent)
-      .filter((event) => isVerifiedPublicEvent(event))
-      .sort(compareEventDesc);
-  } catch {
-    return [];
-  }
+  return cacheStorage.getCachedPublicEvents()
+    .map(normalizeCachedPublicEvent)
+    .filter((event) => isVerifiedPublicEvent(event))
+    .sort(compareEventDesc);
+}
+
+async function hydrateCachedPublicState() {
+  await cacheHydratePromise;
+  return getCachedPublicState();
 }
 
 function loadCachedPublicStateSnapshot() {
-  try {
-    return deserializePublicStateSnapshot(window.localStorage.getItem(publicStateSnapshotKey()));
-  } catch {
-    return null;
-  }
+  const snapshot = cacheStorage.getCachedPublicStateSnapshot();
+  return snapshot ? deserializePublicStateSnapshot(serializePublicStateSnapshot(snapshot)) : null;
 }
 
 function persistCachedPublicStateSnapshot(publicState) {
   try {
     if (!publicState || typeof publicState !== "object") return;
-    window.localStorage.setItem(publicStateSnapshotKey(), serializePublicStateSnapshot(publicState));
+    const snapshot = deserializePublicStateSnapshot(serializePublicStateSnapshot(publicState));
+    cacheStorage.persistCachedPublicStateSnapshot(snapshot);
   } catch {
     return;
   }
@@ -2019,7 +2030,7 @@ function persistCachedPublicStateSnapshot(publicState) {
 function persistCachedPublicEvents(events) {
   try {
     const normalized = mergeCachedEvents(events, []);
-    window.localStorage.setItem(publicEventCacheKey(), JSON.stringify(normalized.slice(0, publicEventCacheLimit())));
+    cacheStorage.persistCachedPublicEvents(normalized.slice(0, publicEventCacheLimit()));
   } catch {
     return;
   }
@@ -2054,14 +2065,6 @@ function normalizeCachedPublicEvent(event) {
       ? event.tags.filter(Array.isArray).map((tag) => tag.map((value) => String(value || "")))
       : []
   };
-}
-
-function publicEventCacheKey() {
-  return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-event-cache`;
-}
-
-function publicStateSnapshotKey() {
-  return `${String(config?.nostr?.storageNamespace || "nostr-site").trim()}.public-state-snapshot`;
 }
 
 function publicEventCacheLimit() {
@@ -2500,18 +2503,26 @@ function withTimeout(promise, timeoutMs) {
   return Promise.race([
     promise,
     new Promise((_, reject) => {
-      window.setTimeout(() => reject(new Error("Relay connection timed out.")), timeoutMs);
+      globalScope.setTimeout(() => reject(new Error("Relay connection timed out.")), timeoutMs);
     })
   ]);
 }
 
 function wait(timeoutMs) {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, Math.max(0, Number(timeoutMs) || 0));
+    globalScope.setTimeout(resolve, Math.max(0, Number(timeoutMs) || 0));
   });
 }
 
 function loadScript(src) {
+  if (typeof document === "undefined") {
+    if (typeof globalScope.importScripts === "function") {
+      return Promise.resolve().then(() => {
+        globalScope.importScripts(src);
+      });
+    }
+    return Promise.reject(new Error(`Failed to load ${src}`));
+  }
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`);
     if (existing) {
@@ -2556,6 +2567,7 @@ function hexToBytes(hex) {
     deriveIdentity,
     generateSecretKeyHex,
     resolveSitePubkey,
+    hydrateCachedPublicState,
     getCachedPublicState,
     loadPublicState,
     publicStateNeedsRepair,

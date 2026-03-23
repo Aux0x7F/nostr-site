@@ -1,68 +1,54 @@
 # Style Guide
 
-## Purpose
-This file is the reusable UI contract for `nostr-site`.
+`nostr-site` is the reusable baseline. It should feel clean, composable, and easy for downstream sites to extend without inheriting page-by-page drift.
 
-`nostr-site` is the generic baseline. It should demonstrate clean, composable patterns that downstream sites can reuse without inheriting page-by-page drift.
+## Product feel
 
-See [COMPONENTS.md](./COMPONENTS.md) for the reusable component families that should converge instead of duplicating.
+- static baseline first
+- live updates layered in, not shoved in front
+- clear main column with supporting rails
+- interactions that feel responsive without becoming noisy
+- strong defaults that downstream sites can extend
 
-## Rendering Model
-- Static content renders first.
-- Live data overlays enrich the baseline without wiping it out.
-- Public pages remain readable without authoring or admin state.
-- Interactive surfaces should prefer in-place updates over full rerenders.
+## Layout rules
 
-## Reusable Primitives
+- main content leads
+- rails support the main story
+- rails align to the content they support
+- sticky rails scroll internally when needed
+- mobile moves control rails above the result set
+
+## Shared primitives
+
+Prefer extending the shared primitives before inventing new ones:
+
 - `surface-panel`
-- `button` / `button-ghost`
-- `tag`
+- primary and ghost buttons
+- compact tags and metadata rows
 - attached search/select controls
-- dropdown pickers anchored to their owning field
-- modal cards for focused tasks
-- sticky side rails that scroll internally when needed
+- modal cards
 
-Whole UI families that compose those primitives should live in `scripts/template/surfaces` before they are copied into more page controllers.
+Reusable behavior should converge in shared layers instead of getting copied into more page controllers.
 
-These are the first tools to extend before adding new one-off patterns.
+## Interaction rules
 
-Current extracted surface families:
+- loading belongs in the component that is loading
+- useful cached state should render immediately
+- background refresh should patch in place
+- attached dropdowns should feel anchored to their field
+- keyboard support matters for pseudo-dropdowns
+- controls need accessible names before enhancement
 
-- `navigation`
-- `archive`
-- `comments`
-- `workspace`
+## State and rendering rules
 
-## Layout Rules
-- Main content column leads; rails support it.
-- Sticky rails align to the top of the content they support.
-- Rails should scroll internally instead of overflowing the viewport.
-- Mobile layouts should move control rails above the result set when they drive filtering.
+- persistent shared state belongs in runtime/document helpers
+- partial remote reads should not erase richer local state
+- unrelated updates should not reset active local UI
+- reply/thread structure should stay anchored even under partial data
 
-## Interaction Rules
-- Attached dropdowns open from the field and overlay what sits below them.
-- Submit-modal entity and location fields should use the same attached dropdown pattern instead of bespoke form widgets.
-- Search fields clear both their value and their active filter state.
-- Keyboard support is expected for all pseudo-dropdowns.
-- Loading indicators should live inside the component that is loading.
-- Cached data should render immediately when available and trustworthy.
-- Interactive controls should have a discernible accessible name in the HTML before JavaScript enhancement.
+## Authoring feel
 
-## State Rules
-- Shared data logic belongs in portable helpers, not duplicated page scripts.
-- Partial remote reads should not erase richer cached state.
-- Background sync should patch the active surface instead of rebuilding it unless access or structure changed.
-- Reply/thread structures should stay anchored to their parent/root even when data is incomplete.
-
-## Authoring Rules
-- Editor chrome should be predictable, not ornamental.
-- Metadata belongs beside the writing surface, not mixed into it.
-- Authoring surfaces should stay mounted through background sync and repair.
-
-## Convergence Targets
-- shared rail/filter helpers
-- shared list and card primitives
-- shared thread rendering helpers
-- shared modal patterns
-- shared editor-side rail and collaboration primitives
-- browser-compatible enhancement patterns guarded by [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md)
+- the editor should feel like a real authoring shell
+- metadata belongs beside the writing surface
+- background sync must not tear the shell down
+- downstream sites should be able to extend the model without replacing the whole frame

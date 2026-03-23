@@ -96,18 +96,14 @@ function renderDashboardPane(workspaceState, deps) {
 
 function renderProfilePane(workspaceState, deps) {
   const current = deps.currentUser();
-  const escapeAttribute = deps.escapeAttribute || ((value) => String(value || ""));
   const escapeHtml = deps.escapeHtml || ((value) => String(value || ""));
   return `
     <div class="workspace-grid">
       <section class="surface-panel">
         <div class="eyebrow">Profile</div>
         <h2>Profile settings</h2>
+        <p class="muted-text">Usernames are fixed account handles. Profile settings update the public details attached to your current handle.</p>
         <form class="tip-form" data-profile-form>
-          <label>
-            <span>Display name</span>
-            <input name="displayName" type="text" maxlength="80" value="${escapeAttribute(current?.displayName || "")}">
-          </label>
           <label>
             <span>Bio</span>
             <textarea name="bio" placeholder="Short bio">${escapeHtml(current?.bio || "")}</textarea>

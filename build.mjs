@@ -3,55 +3,87 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 import { minify as minifyHtml } from "html-minifier-terser";
+import { renderPageHtml, renderRedirectHtml } from "./site-src/layout.mjs";
+import { pageDefinitions, siteTemplate } from "./site-src/pages.mjs";
+import { renderServiceWorker } from "./site-src/service-worker.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = __dirname;
 const dist = path.join(root, "dist");
+const pageSourceRoot = path.join(root, "site-src", "main");
+const buildVersion = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
 
-await fs.rm(dist, { recursive: true, force: true });
 await fs.mkdir(dist, { recursive: true });
 
-const htmlFiles = [
-  "index.html",
-  "blog.html",
-  "post.html",
-  "editor.html",
-  "investigations.html",
-  "investigation.html",
-  "guide.html",
-  "submit.html",
-  "admin.html",
-  "map.html",
-  "get-involved.html",
-  "about.html",
-  "merch.html"
-];
+await esbuild.build({
+  entryPoints: [
+    path.join(root, "scripts", "shell.js"),
+    path.join(root, "scripts", "app.js"),
+    path.join(root, "scripts", "admin.js"),
+    path.join(root, "scripts", "submit.js"),
+    path.join(root, "scripts", "editor.js")
+  ],
+  bundle: true,
+  splitting: true,
+  format: "esm",
+  minify: true,
+  outdir: path.join(dist, "scripts"),
+  entryNames: "[name]",
+  chunkNames: "chunks/[name]-[hash]"
+});
 
-for (const entry of ["app.js", "admin.js", "submit.js", "editor.js"]) {
-  await esbuild.build({
-    entryPoints: [path.join(root, "scripts", entry)],
-    bundle: true,
-    format: "esm",
-    minify: true,
-    outfile: path.join(dist, "scripts", entry)
-  });
-}
+await esbuild.build({
+  entryPoints: [path.join(root, "scripts", "core", "site-runtime-worker.js")],
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  minify: true,
+  outfile: path.join(dist, "site-runtime-worker.js")
+});
 
 const css = await fs.readFile(path.join(root, "styles.css"), "utf8");
 const minifiedCss = await esbuild.transform(css, { loader: "css", minify: true });
 await fs.writeFile(path.join(dist, "styles.css"), minifiedCss.code, "utf8");
 
-for (const file of htmlFiles) {
-  const html = await fs.readFile(path.join(root, file), "utf8");
+for (const page of pageDefinitions) {
+  const html = page.redirectTo
+    ? renderRedirectHtml({ page, site: siteTemplate })
+    : renderPageHtml({
+        page,
+        site: siteTemplate,
+        mainHtml: await fs.readFile(path.join(pageSourceRoot, page.mainSource), "utf8")
+      });
   const minified = await minifyHtml(html, {
     collapseWhitespace: true,
     removeComments: true,
     minifyCSS: false,
     minifyJS: false
   });
-  await fs.writeFile(path.join(dist, file), minified, "utf8");
+  await fs.writeFile(path.join(dist, page.fileName), minified, "utf8");
 }
+
+const vendorAssets = await listRelativeFiles(path.join(root, "vendor"), root);
+const serviceWorkerSource = renderServiceWorker({
+  cacheVersion: buildVersion,
+  precacheUrls: [
+    ...pageDefinitions.map((page) => `./${page.fileName}`),
+    "./styles.css",
+    "./site-runtime-worker.js",
+    "./scripts/shell.js",
+    "./scripts/app.js",
+    "./scripts/admin.js",
+    "./scripts/submit.js",
+    "./scripts/editor.js",
+    "./content/blog/index.json",
+    "./content/pages/guide.md",
+    ...vendorAssets
+  ],
+  runtimeHtmlUrls: pageDefinitions.map((page) => `./${page.fileName}`),
+  runtimeAssetPrefixes: ["./scripts/", "./styles/", "./vendor/"],
+  runtimeContentPrefixes: ["./content/"]
+});
+await fs.writeFile(path.join(dist, "service-worker.js"), serviceWorkerSource, "utf8");
 
 await copyDir(path.join(root, "content"), path.join(dist, "content"));
 await copyDir(path.join(root, "vendor"), path.join(dist, "vendor"));
@@ -67,5 +99,23 @@ async function copyDir(source, target) {
     } else {
       await fs.copyFile(from, to);
     }
+  }
+}
+
+async function listRelativeFiles(source, base) {
+  try {
+    const entries = await fs.readdir(source, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const from = path.join(source, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await listRelativeFiles(from, base));
+        continue;
+      }
+      files.push(`./${path.relative(base, from).replaceAll(path.sep, "/")}`);
+    }
+    return files;
+  } catch {
+    return [];
   }
 }
