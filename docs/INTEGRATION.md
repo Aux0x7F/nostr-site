@@ -1,150 +1,71 @@
-# Integration Contract
+# Integration
 
-This document describes how `nostr-site` consumes `nostr-crdt`.
-
-It is intentionally separate from `ARCHITECTURE.md`:
-
-- `ARCHITECTURE.md` explains the repo boundary and current runtime model
-- `INTEGRATION.md` explains how the framework hooks into a generic CRDT transport
+This file covers one boundary: how `nostr-site` uses [`nostr-crdt`](https://github.com/YousefED/nostr-crdt).
 
 ## Boundary
 
-`nostr-site` treats `nostr-crdt` as a transport and merge layer, not as an application framework.
+`nostr-crdt` is the transport and sync layer.
 
-That means:
+It owns:
 
-- `nostr-crdt` handles document sync
-- `nostr-site` decides whether a synced update is trusted
-- `nostr-site` decides how live document state is rendered or published
+- document sync
+- room transport
+- replay and merge behavior
+
+`nostr-site` owns:
+
+- trust decisions
+- site/runtime behavior
+- projection and document integration
+- how live state is rendered and published
+
+The framework should never smuggle site policy down into the transport layer.
 
 ## First integration targets
 
 The first collaborative unit types are:
 
 - static pages
-- posts
+- post-like authored units
 - entity or wiki records
 
-Everything else can remain event-shaped until a collaboration need justifies moving it.
+Other data can stay event-shaped until collaboration pressure makes a CRDT path worth it.
 
-## Acceptance hook
+## Trust hook
 
-`nostr-site` provides an acceptance function to the transport layer.
+The framework provides the transport with an acceptance rule that answers questions like:
 
-At a minimum, it must answer:
+- is this signer currently trusted here
+- is this signer allowed to mutate this unit type
 
-- is the signer currently trusted for this site
-- is the signer allowed to mutate this unit type
+Transport should not own those answers.
 
-The transport library should not embed those rules.
+## Rendering rule
 
-## Rendering contract
-
-`nostr-site` renders:
+The model stays the same:
 
 1. static baseline
 2. trusted live overlay
 
-That means collaborative state should enhance or replace the corresponding unit after static load, not replace the whole site boot model.
+That rule applies to CRDT-backed units and to other public runtime state as well.
 
-The same rule applies to non-CRDT public state:
+## Pinner relationship
 
-- use cached public state first when available
-- reconcile in the background
-- patch in place instead of tearing surfaces down
+Pinner interacts with collaborative units by:
 
-Template-facing expectations for the resulting surfaces belong in:
-
-- `COMPONENTS.md`
-- `STYLE_GUIDE.md`
-- `BROWSER_SUPPORT.md`
-
-## Pinner contract
-
-Peer pinner interacts with collaborative units by:
-
-- replaying current trusted document state
+- replaying trusted state
 - optionally checkpointing it
-- exporting it into repo files on a configured cadence
-- opening or updating a GitHub PR
+- exporting reviewed output
+- opening or updating a PR
 
-Peer pinner should not be required for basic browser collaboration to work.
-
-## Migration contract
-
-Until the CRDT transport lands, existing event-shaped workflows remain valid.
-
-The migration path is:
-
-1. keep current static-first rendering
-2. add live collaborative units one unit type at a time
-3. preserve bakedown and PR workflow as the static publication layer
+Browser collaboration should not depend on pinner being present. Pinner is for publication and review, not for basic editing to function.
 
 ## Current integration surface
 
-The framework now exposes a generic CRDT bridge for host code:
+Today the framework exposes:
 
 - `createNostrCrdtBridge(config)`
 - `createStaticPageOverlayApi(config)`
 - `createStructuredUnitOverlayApi(config)`
 
-The framework also exposes a public-state repair layer through `createNostrCmsClient(config)`:
-
-- `loadPublicState()`
-- `publicStateNeedsRepair(publicState)`
-- `requestPublicStateRepair(secretKeyHex, options)`
-- `startPublicStateRepairPeer()`
-
-The support bundle also exposes host-side rendering helpers:
-
-- `sanitizeTrustedHtml(html)`
-- `sanitizeUrl(value, mode)`
-
-That bridge is responsible for:
-
-- deriving room ids from the site namespace
-- creating a transport adapter on top of the existing relay toolchain
-- creating signers from the existing deterministic key model
-- verifying signed CRDT events before replay or live apply
-- verifying signed public events before caching or repair rebroadcast
-- creating Yjs sync instances without embedding application-specific trust rules
-
-The public-state model now also includes comment vote aggregation:
-
-- `commentVotes`
-- `score`, `upvoteCount`, and `downvoteCount` on comment records
-
-The first consumer is static page units.
-
-`createStaticPageOverlayApi(config)` is the higher-level helper for that first slice. It provides:
-
-- one live unit per page id
-- trusted signer filtering via host-provided admin lookup
-- read-only live overlay for visitors
-- explicit publish hooks for admin-authored page changes
-
-`createStructuredUnitOverlayApi(config)` is the generic companion for object-like units. It provides:
-
-- one live unit per document id
-- structured object sync over the same verified Yjs/Nostr transport
-- trusted signer filtering via host-provided acceptance checks
-- read-only overlay for visitors and explicit publish hooks for trusted editors
-
-The public-state repair layer is intentionally separate from CRDT unit sync.
-
-Its job is:
-
-- cache original signed public events in the browser
-- request repair when relay reads look incomplete
-- let other browsers rebroadcast cached original events
-- only merge or rebroadcast locally verified signed events
-- preserve verifiability by replaying the original events instead of inventing a second state source
-
-## Regression expectations
-
-Framework changes that affect live state or cached state must come with focused tests for:
-
-- cache-first restore
-- optimistic update persistence across background refresh
-- identifier stability across publish, reload, and replay
-- hierarchical integrity for threaded or nested data
+It also exposes the runtime and document plumbing needed for downstream hosts to connect those units to the rest of the site model.

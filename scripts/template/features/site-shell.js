@@ -1,4 +1,4 @@
-import { clearSession } from "../../core/session.js";
+import { getSiteRuntimeClient } from "../../core/runtime-client.js";
 import {
   clampNotificationsPanel,
   closeProfileMenu,
@@ -60,9 +60,6 @@ export function createSiteShellFeature({
         safeAvatarUrl
       }
     });
-    for (const disabled of nav.querySelectorAll('[aria-disabled="true"]')) {
-      disabled.addEventListener("click", (event) => event.preventDefault());
-    }
   }
 
   function initExternalLinks() {
@@ -143,13 +140,20 @@ export function createSiteShellFeature({
       }
       if (target.closest("[data-signout]")) {
         event.preventDefault();
-        clearSession();
-        state.session = null;
-        state.viewer = null;
-        setNavigationOpen(false);
-        renderNavigation();
-        onSignedOut?.();
-        window.location.reload();
+        void (async () => {
+          try {
+            const runtimeClient = await getSiteRuntimeClient();
+            await runtimeClient.signOut();
+          } catch {
+            // Fall back to local state reset if the shared runtime is unavailable.
+          }
+          state.session = null;
+          state.viewer = null;
+          setNavigationOpen(false);
+          renderNavigation();
+          onSignedOut?.();
+          window.location.reload();
+        })();
         return;
       }
       for (const menu of document.querySelectorAll("[data-profile-menu].is-open")) {

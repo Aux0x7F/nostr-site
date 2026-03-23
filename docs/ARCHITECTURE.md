@@ -1,198 +1,116 @@
 # Architecture
 
-This repo is the host-application layer that sits between a generic CRDT transport and a concrete site implementation.
+`nostr-site` is the generic site framework layer. It sits between [`nostr-crdt`](https://github.com/YousefED/nostr-crdt) and a downstream site such as [`truecost`](https://github.com/Aux0x7F/truecost).
 
-## Repo boundary
-
-The three-repo split is:
+## Repo split
 
 - `nostr-crdt`
-  - generic CRDT transport over Nostr
-  - room identity, replay, checkpoints, buffered updates
-  - no site-specific auth, review, publishing, or bakedown policy
+  - transport and sync
 - `nostr-site`
-  - generic site framework and policy layer
-  - account model, admin model, moderation model, draft model, bakedown requests, peer pinner integration
-  - decides how and when a trusted live overlay should affect site state
-- `truecost`
-  - project-specific pages, content, copy, styling, and operating choices
+  - site runtime, projections, document plumbing, support bundle, pinner integration
+- downstream site
+  - product choices, styling, content, workflows, and policy on top of the framework
 
-`nostr-site` consumes a generic transport library. It does not become the transport library.
+`nostr-site` should stay generic. It is not the transport library, and it is not the final site.
 
-## Current state
+## Framework model
 
-Today, `nostr-site` already provides:
+The framework is built around a static-first site:
 
-- deterministic accounts
-- earliest-claim username ownership with collision detection
-- admin grant and revoke model
-- public drafts, entities, comments, and moderation state
-- encrypted submission intake
-- peer-pinner-driven bakedown and PR support
-- static-first rendering with relay-backed enrichment
-- generic CRDT transport bridge to `nostr-crdt`
-- generic static-page live overlay helper with host-provided trust rules
-- generic structured live-unit overlay helper for post-like and record-like documents
-- cached public-event replay and peer-assisted repair requests for partial relay reads, limited to locally verified signed events
-- generic comment vote aggregation in public state
-- reusable trusted HTML sanitization helpers for host renderers
-- shared evidence-graph and wiki helpers:
-  - entity normalization
-  - relationship normalization
-  - graph build/filter/highlight helpers
-  - wiki-view derivation for host rails and entity pages
+1. a built snapshot loads first
+2. the shell becomes interactive quickly
+3. runtime state restores from durable local data when available
+4. live relay-backed state reconciles in the background
+5. mounted features patch their own regions instead of tearing whole pages down
 
-Today, `nostr-site` does not yet provide:
+That keeps the baseline fast, crawlable, and understandable while still allowing live behavior.
 
-- a full template-level consumer for every collaborative unit type
-- a generic template-level graph explorer or wiki route shell
+## Browser runtime
 
-## Target model
+The browser runtime is split into four parts:
 
-The framework model is:
+- shared worker
+  - same-origin runtime owner
+  - auth/session actions
+  - relay-backed reduction
+  - shared projection state
+- IndexedDB
+  - durable store for projections, documents, cached events, and session metadata
+- service worker
+  - cache and fetch boundary for pages, assets, and materialized snapshots
+- template or host feature controllers
+  - subscribe to projection slices and patch only their own DOM regions
 
-1. Static content is the baseline.
-2. Clients optionally connect to Nostr after load.
-3. Clients receive newer live unit state through a generic CRDT transport.
-4. Clients only apply that live state if the signer is currently trusted by the host application's auth model.
-5. Peer pinner periodically materializes the latest trusted state into repo files and opens or updates a PR.
-6. Merge of that PR advances the static baseline.
+Shared runtime state uses one envelope shape:
 
-This keeps first load fast and deterministic while still supporting live collaboration.
+- `value`
+- `status`
+- `digest`
+- `updatedAt`
 
-The reusable surface and compatibility expectations that should govern that work now live in:
+When a refresh degrades, the runtime keeps the last good value and updates `status` instead of blanking the surface.
 
-- `COMPONENTS.md`
-- `STYLE_GUIDE.md`
-- `BROWSER_SUPPORT.md`
+## What upstream owns
 
-The concrete template and downstream sites should keep moving toward a `scripts/core -> scripts/template/features -> scripts/template/surfaces` split, where shared services live in core, route-owned logic lives in features, and UI families live in surfaces instead of accumulating inside page controllers. The template now applies that directly for site runtime/bootstrap, content pages, post detail, navigation, archive, comments, submit shell rendering, workspace rendering, workspace account flows, workspace filters, workspace actions, map shells, editor-shell rendering, notification/profile-menu state through dedicated core helpers, and a shared `scripts/core/public-state-store.js` boundary for public/workspace/editor lifecycle.
+`nostr-site` owns reusable behavior such as:
 
-Graph/wiki boundaries follow the same split:
+- deterministic account/session plumbing
+- shared runtime host/client behavior
+- projection storage and restore behavior
+- document controller and structured-document plumbing
+- template shell and reusable surface patterns
+- pinner-facing bakedown integration
 
-- `portable/graph-wiki.js`
-  - reusable evidence-graph and wiki-view helpers
-- downstream host
-  - chooses routes, visual language, draft relationship workflows, and graph/wiki shell behavior
+## What downstream sites own
 
-Mounted shell updates should now follow an observed-region rule:
+Downstream sites own:
 
-- features observe the state slices they care about
-- features route updates to the specific DOM regions they own
-- unchanged overlays and active form roots stay mounted
-- full shell replacement is reserved for actual structural changes
+- product copy and branding
+- page structure and content choices
+- site-specific moderation and workflow rules
+- site-specific graph/wiki presentation
+- anything too opinionated to belong in a generic framework
 
-Route query params should use the same architecture:
+## Code layout
 
-- shared query-state helper in `scripts/core`
-- features subscribe only to the params they consume
-- features route param changes to the DOM regions they own
-- page controllers should not keep reintroducing direct `window.location.search` reads for mounted interactive behavior
+- `portable/`
+  - reusable source-of-truth logic
+- `scripts/core/`
+  - browser/runtime helpers shared across the template
+- `scripts/template/features/`
+  - route and feature orchestration
+- `scripts/template/surfaces/`
+  - reusable template UI families
 
-## Cache-first live state contract
+Keep the split strict:
 
-Every live surface in the framework must follow the same boot order:
+- shared persistent state belongs in runtime/document logic
+- orchestration belongs in features
+- rendering belongs in surfaces
+- downstream product behavior stays downstream
 
-1. render static baseline if available
-2. render cached live state immediately if a trustworthy cache exists
-3. reconcile against relays in the background
-4. patch the mounted surface in place through the owning feature or region root
+## Publication and pinner
 
-Live surfaces must not blank useful cached content just because a network refresh is in flight.
+The browser is not the final publisher.
 
-Async network state and local draft UI state should stay separate. Background refresh must not wipe active input that does not depend on the changed state.
+The publish path is:
 
-This applies to:
+1. trusted live state exists on relays
+2. admins work against the live layer
+3. pinner materializes approved state into reviewed output
+4. merge advances the static baseline
 
-- archive views
-- comment threads
-- map/entity views
-- workspace lists
-- collaborative document overlays
+That keeps the framework aligned with a reviewed-publication model instead of turning the browser into the last word.
 
-## Collaborative units
+## A few terms
 
-The host framework should think in terms of one collaborative unit per document:
-
-- page
-- post
-- entity or wiki record
-
-The framework should not encourage one giant site-wide document.
-
-The framework also should not force a specific CRDT engine into all state. Only the units that benefit from live collaboration should use the transport layer.
-
-## Testing contract
-
-New live-state features are not complete without regression coverage for:
-
-- cached-first render
-- optimistic local update behavior
-- reload resilience
-- stale remote merge behavior
-- nested structure integrity where threading or hierarchy exists
-
-Manual browser checks are still useful, but they do not replace deterministic regression tests for these cases.
-
-## Trust boundary
-
-`nostr-site` is where signer trust becomes product behavior.
-
-The generic transport verifies event shape and Nostr signatures, but `nostr-site` decides whether a signer is allowed to affect visible state.
-
-The trust rule is:
-
-- live content events are signed by the editor's own key
-- `nostr-site` reconstructs the current allowed admin set from its existing admin grant and revoke chain
-- only updates from currently trusted signers are applied to privileged live overlay state
-
-This is a host-app concern, not a transport concern.
-
-For deterministic accounts, `nostr-site` also establishes canonical username ownership from the earliest explicit claim and marks later same-name claimants as conflicts. Host applications can use that derived state to block conflicted sessions from acting until they choose a unique username, and to verify ownership against a direct username lookup before persisting a session locally.
-
-`nostr-site` also supports a stronger signed moderation state for identities labeled `removed`. Removed pubkeys should be excluded from normal user/entity/comment projections and from username-ownership resolution, while still allowing host applications to treat that pubkey as explicitly removed for session validation and operator handling. This is intended as an operator/root-level action, not a normal workspace control.
-
-## Peer pinner role
-
-Peer pinner is not the transport layer and not the source of truth for merge logic.
-
-Peer pinner should act as:
-
-- durable peer
-- checkpoint helper
-- bakedown worker
-- PR automation worker
-
-It should not own application auth policy beyond enforcing the current trusted signer set when fulfilling privileged downstream actions.
-
-## Publishing contract
-
-For trusted live content, the publishing model is:
-
-- editors change collaborative units live
-- clients receive and verify the live overlay
-- pinner periodically materializes the latest trusted state into repo files
-- Git PR review keeps the static baseline auditable
-
-This is intentionally simpler than a heavy manual snapshot queue for every edit.
-
-## Implementation guidance
-
-When `nostr-site` adopts `nostr-crdt`, the first integration should target:
-
-- static pages
-- posts
-- entity or wiki records
-
-The reusable helpers are now split accordingly:
-
-- `createStaticPageOverlayApi(config)` for page-field overlays
-- `createStructuredUnitOverlayApi(config)` for object-like collaborative units such as posts and entity records
-
-Submissions, admin logs, moderation events, and other workflow records can stay event-shaped rather than CRDT-shaped unless a real collaboration need appears.
-
-## Open questions
-
-- whether all admins should remain publishers, or whether `editor` and `publisher` should diverge later
-- how much checkpointing should happen in browsers versus durable peers
-- whether entity wiki data should be a richer structured document than page and post content
+- static-first
+  - useful built output before live state arrives
+- projection
+  - reduced runtime view of shared state
+- document controller
+  - the layer that owns document open/apply/close behavior
+- bakedown
+  - turning approved live state into reviewed static output
+- pinner
+  - service that materializes approved state and opens or updates PRs

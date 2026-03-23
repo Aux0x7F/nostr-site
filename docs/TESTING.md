@@ -1,57 +1,83 @@
-# Testing Contract
+# Testing
 
-`nostr-site` is the generic policy and state layer. Regressions here propagate into every host site.
+`nostr-site` is the shared framework layer. Regressions here spread downstream fast, so the testing bar needs to stay high and predictable.
 
-## Minimum bar
+## Baseline
 
-Any change that affects live state, cached state, or public rendering should have:
+For most framework changes, the minimum bar is:
 
-- a deterministic unit test for the data contract
-- a focused feature/runtime test when route-owned logic moves out of a root controller
-- a focused surface test when a render family moves out of a page controller
-- a controller or browser regression when the failure mode is an unrelated rerender wiping active local input state
-- a syntax/build pass
-- a note about which surface behavior was validated
-- a compatibility note when introducing non-baseline browser features
+- a deterministic unit test for the changed rule
+- a feature/runtime test when behavior moves out of an entry file
+- a browser or controller-level regression when the failure depends on rerender timing or UI lifecycle
+- build validation for touched runtime or template behavior
 
-## Required live-state cases
+## What different changes need
 
-Where applicable, tests should cover:
+### Runtime and projection changes
+
+Cover:
+
+- projection envelope behavior
+- last-good value retention during degraded refresh
+- cached-first restore
+- shared runtime/session behavior when relevant
+- durable projection persistence and restore
+
+### Document changes
+
+Cover:
+
+- structured-document normalization
+- document-controller behavior
+- projection sync behavior
+- exporter output
+- metadata round-trip, including richer image placement
+
+### Template and surface changes
+
+Cover:
+
+- the surface or feature that owns the behavior
+- in-place patching instead of shell teardown
+- dropdown or focus behavior when relevant
+- preservation of active local input state during unrelated updates
+
+### Browser-sensitive changes
+
+Browser checks matter when the issue depends on:
+
+- boot order
+- DOM timing
+- dropdown geometry
+- shell stability during rerenders
+- service worker or build output behavior
+
+## Core scenarios worth keeping honest
+
+Where applicable, tests should exercise:
 
 - cached-first render
-- stale remote merge against richer local state
-- optimistic update persistence
-- stable identifiers across publish and reload
-- hierarchy preservation for nested data
-- visible control effect after local mutation when the change affects local interactive state
-- session/account integrity rules such as username-claim collision handling
-- signed identity-removal handling, including ownership exclusion and filtered projections
-
-## Preferred test split
-
-- `portable/*`
-  - pure unit tests for parsing, derivation, merge, and cache behavior
-- browser smoke
-  - high-value end-to-end user flows
-
-See [BROWSER_SUPPORT.md](./BROWSER_SUPPORT.md) for the compatibility fallback expectations that should be validated when relevant.
+- optimistic local changes
+- stale merge against richer local state
+- nested data integrity
+- visible control effect after mutation
+- session and integrity edge cases
+- durable runtime restore
+- structured-document round-trip behavior
 
 ## Current commands
 
 - `npm run test:unit`
-- `node --test test/archive-surface.test.mjs`
-- `node --test test/shell-surfaces.test.mjs`
-- `node --test test/public-state-store.test.mjs`
-- `node --test test/observed-regions.test.mjs`
+- `node --test test/runtime-client.test.mjs`
+- `node --test test/site-runtime.test.mjs`
+- `node --test test/document-controller.test.mjs`
+- `node --test test/document-local-state.test.mjs`
+- `node --test test/document-projection-sync.test.mjs`
 - `node --test test/navigation-notification.test.mjs`
-- `node --test test/public-state-store.test.mjs`
-- `node --test test/workspace-actions.test.mjs`
-- `node --test test/workspace-filters.test.mjs`
-- `node --test test/editor-shell.test.mjs`
-- `node --test test/map-surface.test.mjs`
-- `node --test test/submit-shell.test.mjs`
+- `node --test test/site-template-build.test.mjs`
+- `node --test test/service-worker.test.mjs`
 - `npm run build`
 - `npm run build:support-lib`
 - `npm run smoke:browser`
 
-`npm run test:unit` should remain the umbrella command for all `test/*.test.mjs` unit coverage.
+`npm run test:unit` remains the umbrella unit command.

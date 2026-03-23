@@ -1,7 +1,6 @@
-export function navLinkClass(page, navKeys, key, disabled = false) {
+export function navLinkClass(page, navKeys, key) {
   const parts = ["nav-link"];
   if (navKeys[key]?.includes(page)) parts.push("is-current");
-  if (disabled) parts.push("is-disabled");
   return parts.join(" ");
 }
 
@@ -52,7 +51,6 @@ export function renderNavigationMarkup({
   notificationsLoading = false,
   profileMenuOpen = false,
   notificationsExpanded = false,
-  mapEnabled = true,
   deps = {}
 } = {}) {
   const escapeHtml = deps.escapeHtml || ((value) => String(value || ""));
@@ -108,7 +106,7 @@ export function renderNavigationMarkup({
         </div>
       </div>
     `
-    : `<a class="profile-cta" href="./admin.html?tab=login" aria-label="Create or log in">Create/Login</a>`;
+    : `<button class="profile-cta" type="button" data-auth-open aria-label="Create or log in">Create/Login</button>`;
 
   return `
     <a class="${navLinkClass(page, navKeys, "home")}" href="./index.html">Home</a>
@@ -127,7 +125,7 @@ export function renderNavigationMarkup({
         `
         : `<a class="${navLinkClass(page, navKeys, "blog")}" href="./blog.html">Blog</a>`
     }
-    <a class="${navLinkClass(page, navKeys, "map", !mapEnabled && !navKeys.map?.includes(page))}" href="./map.html" ${!mapEnabled && !navKeys.map?.includes(page) ? 'aria-disabled="true"' : ""}>Map</a>
+    <a class="${navLinkClass(page, navKeys, "map")}" href="./map.html">Map</a>
     <div class="nav-group ${navKeys["get-involved"]?.includes(page) ? "is-current" : ""}" data-nav-group>
       <button class="nav-group__toggle" type="button" data-submenu-toggle>
         Get Involved

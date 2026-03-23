@@ -75,7 +75,7 @@ export function createWorkspaceAccountController({
         avatarBlob = upload;
       }
       await runtime.rebroadcastAccount(state.session, {
-        displayName: formData.get("displayName"),
+        displayName: current?.displayName || "",
         avatarUrl,
         avatarBlob,
         bio: formData.get("bio"),

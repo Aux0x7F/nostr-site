@@ -5,23 +5,21 @@ import {
   parseContentDocument,
   slugify
 } from "../core/content-utils.js";
-import { formatDate, sortDateValue } from "../core/formatting.js";
-import { fetchJson, fetchText } from "../core/http.js";
 import { setText } from "../core/dom.js";
+import { formatDate, sortDateValue } from "../core/formatting.js";
+import { createFeatureManifest } from "../core/feature-manifest.js";
+import { fetchJson, fetchText } from "../core/http.js";
 import {
   cleanSlug,
   deriveIdentity,
   ensureBlobAvailable,
   ensureEventToolsLoaded,
   hasNostrTools,
-  loadAdminKeyShare,
-  loadInboxSubmissions,
-  loadSubmissionThread,
-  loadUserSubmissions,
   publishTaggedJson
 } from "../core/nostr.js";
-import { createPublicStateStore } from "../core/public-state-store.js";
+import { createPublicStateProjectionStore } from "../core/public-state-projection.js";
 import { createContentPostStore } from "../core/posts-store.js";
+import { createSiteSignerClient } from "../core/site-signer.js";
 import {
   buildToc,
   renderError,
@@ -33,45 +31,26 @@ import {
 import { createViewerController } from "../core/viewer-controller.js";
 import { createNavigationUiState } from "../core/navigation-state.js";
 import { createNotificationState } from "../core/notification-state.js";
-import { createSiteNotificationBuilder } from "../core/notification-builders.js";
+import { createPageRouter } from "../core/page-router.js";
 import {
   draftReviewAction,
   draftStatusLabel,
   normalizeDraftStatus
 } from "../core/draft-review.js";
-import { getStoredGuestSession, getStoredSession, saveSession } from "../core/session.js";
+import { getOrCreateGuestSession, getStoredGuestSession, getStoredSession, saveSession } from "../core/session.js";
 import { createQueryState } from "../core/query-state.js";
-import {
-  bindMapEntityCards as bindMapSurfaceEntityCards,
-  renderLeafletMapSurface,
-  renderMapPageSurface,
-  scheduleMapEntityFocus as scheduleSurfaceMapEntityFocus
-} from "./surfaces/map.js";
-import { renderPostCard } from "./surfaces/archive.js";
-import { createContentPagesFeature } from "./features/content-pages.js";
-import { createMapPageFeature } from "./features/map-page.js";
-import { createPostDetailFeature } from "./features/post-detail.js";
+import NAV_KEYS from "./core/nav-keys.js";
 import { createSiteRuntime } from "./features/site-runtime.js";
 import { createSiteShellFeature } from "./features/site-shell.js";
-
-const NAV_KEYS = {
-  home: ["home"],
-  blog: ["blog", "post", "investigations", "investigation", "editor"],
-  guide: ["guide"],
-  submit: ["submit"],
-  "get-involved": ["get-involved"],
-  about: ["about"],
-  merch: ["merch"],
-  map: ["map"],
-  workspace: ["workspace"]
-};
 
 const navigationUi = createNavigationUiState();
 const queryState = createQueryState();
 let appRuntime = null;
+let siteShellFeature = null;
+let signerClient = null;
 
-const publicStateStore = createPublicStateStore({
-  getSessionSecretKey: async () => (appRuntime ? appRuntime.getRequestSignerSecretKey() : ""),
+const publicStateStore = createPublicStateProjectionStore({
+  getSessionSecretKey: async () => (signerClient ? signerClient.resolveSecretKey() : ""),
   page: () => document.body.dataset.page || "site",
   refreshDelayMs: () => 0,
   shouldRefresh: () => false
@@ -102,6 +81,12 @@ const state = {
   pendingMapEntitySlug: ""
 };
 
+signerClient = createSiteSignerClient({
+  state,
+  ensureEventToolsLoaded,
+  getOrCreateGuestSession
+});
+
 const viewerController = createViewerController({
   state,
   site: SITE,
@@ -110,29 +95,14 @@ const viewerController = createViewerController({
   persistSession: saveSession
 });
 
-let siteShellFeature = null;
-
-const buildSiteNotifications = createSiteNotificationBuilder({
-  deps: {
-    loadAdminKeyShare,
-    loadInboxSubmissions,
-    loadSubmissionThread,
-    loadUserSubmissions
-  }
-});
-
 const notificationState = createNotificationState({
   storageNamespace: SITE.nostr.storageNamespace,
-  onChange: () => siteShellFeature?.renderNavigation(),
+  onChange: () => siteShellFeature?.renderNavigation?.(),
   getSession: () => state.session,
-  getViewerPubkey: () => state.viewer?.pubkey || "",
-  getPublicState: (force) => appRuntime?.getPublicState(force),
-  buildNotifications: ({ publicState }) =>
-    buildSiteNotifications({
-      publicState,
-      viewer: state.viewer,
-      sessionSecretKeyHex: state.session?.secretKeyHex || ""
-    })
+  getViewerPubkey: () =>
+    state.viewer?.pubkey ||
+    viewerController.resolvedSessionPubkey?.({ deriveWhenAvailable: true }) ||
+    ""
 });
 
 appRuntime = createSiteRuntime({
@@ -144,47 +114,8 @@ appRuntime = createSiteRuntime({
   postsStore,
   ensureEventToolsLoaded,
   publishTaggedJson,
-  ensureBlobAvailable
-});
-
-const contentPagesFeature = createContentPagesFeature({
-  site: SITE,
-  state,
-  viewerController,
-  postsStore,
-  getPublicState: (force) => appRuntime.getPublicState(force),
-  publishTaggedJson,
-  renderLoadingState,
-  renderError,
-  renderTagList,
-  renderMiniMarkdown,
-  buildToc,
-  fetchText,
-  slugify,
-  enrichEntityReferences,
-  parseContentDocument,
-  draftHelpers: {
-    list: (drafts) => (Array.isArray(drafts) ? drafts : []),
-    draftReviewAction,
-    draftStatusLabel,
-    normalizeDraftStatus,
-    sortDateValue
-  }
-});
-
-const mapPageFeature = createMapPageFeature({
-  state,
-  postsStore,
-  getPublicState: (force) => appRuntime.getPublicState(force),
-  queryState,
-  collectEntityRefsFromText,
-  renderMapPageSurface,
-  renderLeafletMapSurface,
-  bindMapEntityCards: bindMapSurfaceEntityCards,
-  scheduleLeafletFocus: scheduleSurfaceMapEntityFocus,
-  cleanSlug,
-  renderError,
-  renderLoadingState
+  ensureBlobAvailable,
+  resolveSignerSecretKey: () => signerClient.resolveSecretKey()
 });
 
 siteShellFeature = createSiteShellFeature({
@@ -196,37 +127,141 @@ siteShellFeature = createSiteShellFeature({
   refreshAvatarFromCache: (target) => appRuntime.refreshAvatarFromCache(target)
 });
 
-const postDetailFeature = createPostDetailFeature({
-  site: SITE,
-  state,
-  viewerController,
-  postsStore,
-  getPublicState: (force) => appRuntime.getPublicState(force),
-  publishTaggedJson,
-  publicStateStore,
-  notificationState,
-  hydrateNotifications: (force) => appRuntime.hydrateNotifications(force),
-  contentPagesFeature,
-  renderLoadingState,
-  renderError,
-  renderTagList,
-  renderRecordList,
-  renderPostCard,
-  setText,
-  formatDate
+const featureManifest = createFeatureManifest({
+  contentPages: async () => {
+    const { createContentPagesFeature } = await import("./features/content-pages.js");
+    const contentPagesFeature = createContentPagesFeature({
+      site: SITE,
+      state,
+      viewerController,
+      postsStore,
+      getPublicState: (force) => appRuntime.getPublicState(force),
+      publishTaggedJson,
+      renderLoadingState,
+      renderError,
+      renderTagList,
+      renderMiniMarkdown,
+      buildToc,
+      fetchText,
+      slugify,
+      enrichEntityReferences,
+      parseContentDocument,
+      draftHelpers: {
+        list: (drafts) => (Array.isArray(drafts) ? drafts : []),
+        draftReviewAction,
+        draftStatusLabel,
+        normalizeDraftStatus,
+        sortDateValue
+      }
+    });
+    appRuntime.connectFeatures({ contentPagesFeature });
+    return { contentPagesFeature };
+  },
+  mapPage: async () => {
+    const [
+      { createMapPageFeature },
+      {
+        bindMapEntityCards,
+        renderLeafletMapSurface,
+        renderMapPageSurface,
+        scheduleMapEntityFocus
+      }
+    ] = await Promise.all([
+      import("./features/map-page.js"),
+      import("./surfaces/map.js")
+    ]);
+    const mapPageFeature = createMapPageFeature({
+      state,
+      postsStore,
+      getPublicState: (force) => appRuntime.getPublicState(force),
+      queryState,
+      collectEntityRefsFromText,
+      renderMapPageSurface,
+      renderLeafletMapSurface,
+      bindMapEntityCards,
+      scheduleLeafletFocus: scheduleMapEntityFocus,
+      cleanSlug,
+      renderError,
+      renderLoadingState
+    });
+    appRuntime.connectFeatures({ mapPageFeature });
+    return { mapPageFeature };
+  },
+  postDetail: async () => {
+    const [
+      { createPostDetailFeature },
+      { renderPostCard },
+      { contentPagesFeature }
+    ] = await Promise.all([
+      import("./features/post-detail.js"),
+      import("./surfaces/archive.js"),
+      featureManifest.load("contentPages")
+    ]);
+    const postDetailFeature = createPostDetailFeature({
+      site: SITE,
+      state,
+      viewerController,
+      postsStore,
+      getPublicState: (force) => appRuntime.getPublicState(force),
+      publishTaggedJson,
+      publicStateStore,
+      notificationState,
+      hydrateNotifications: (force) => appRuntime.hydrateNotifications(force),
+      contentPagesFeature,
+      renderLoadingState,
+      renderError,
+      renderTagList,
+      renderRecordList,
+      renderPostCard,
+      setText,
+      formatDate
+    });
+    appRuntime.connectFeatures({ postDetailFeature });
+    return { postDetailFeature };
+  }
 });
 
+function preloadFeatureGroups(page) {
+  const pagePreloads = {
+    home: ["contentPages", "mapPage"],
+    blog: ["contentPages", "postDetail"],
+    post: ["postDetail", "contentPages"],
+    map: ["mapPage", "contentPages"],
+    guide: ["contentPages"],
+    about: ["contentPages"],
+    "get-involved": ["contentPages"],
+    merch: ["contentPages"],
+    submit: ["contentPages"]
+  };
+  featureManifest.preload(pagePreloads[page] || ["contentPages"]);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  const page = document.body.dataset.page || "";
+  window.__nostrSiteImmediateShell?.destroy?.();
   siteShellFeature.mount();
-  contentPagesFeature.mountCards();
-  void postDetailFeature.mount();
-  contentPagesFeature.initMarkdownArticles();
-  mapPageFeature.mount();
-  appRuntime.connectFeatures({
-    contentPagesFeature,
-    mapPageFeature,
-    postDetailFeature,
-    siteShellFeature
-  });
+  appRuntime.connectFeatures({ siteShellFeature });
+  void postsStore.hydrateCache().catch(() => []);
   appRuntime.start();
+
+  createPageRouter({ page })
+    .when(["home", "blog"], async () => {
+      const { contentPagesFeature } = await featureManifest.load("contentPages");
+      contentPagesFeature.mountCards();
+    })
+    .when("post", async () => {
+      const { postDetailFeature } = await featureManifest.load("postDetail");
+      await postDetailFeature.mount();
+    })
+    .when("map", async () => {
+      const { mapPageFeature } = await featureManifest.load("mapPage");
+      await mapPageFeature.mount();
+    })
+    .when(["guide", "about", "get-involved", "merch", "submit"], async () => {
+      const { contentPagesFeature } = await featureManifest.load("contentPages");
+      await contentPagesFeature.initMarkdownArticles();
+    })
+    .mount();
+
+  preloadFeatureGroups(page);
 });

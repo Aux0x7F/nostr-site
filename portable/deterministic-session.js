@@ -1,78 +1,65 @@
+import { createPersistentSessionStore } from "./session-storage.js";
+
 export function createDeterministicSessionApi(config, deps) {
   const {
     deriveIdentity,
     ensureEventToolsLoaded,
     normalizeUsername,
-    publishTaggedJson
+    publishTaggedJson,
+    sessionStore = createPersistentSessionStore({
+      namespace: config?.nostr?.storageNamespace || "nostr-site"
+    })
   } = deps;
-  const storageKey = `${config.nostr.storageNamespace}.session`;
-  const guestStorageKey = `${config.nostr.storageNamespace}.guest`;
+  void sessionStore.hydrate?.().catch(() => null);
+
+  async function hydrateStoredSessions() {
+    await Promise.resolve(sessionStore.hydrate?.()).catch(() => null);
+    return {
+      session: getStoredSession(),
+      guestSession: getStoredGuestSession()
+    };
+  }
+
+  async function resolveStoredSession(options = {}) {
+    await hydrateStoredSessions();
+    const storedSession = getStoredSession();
+    if (!storedSession) return null;
+    return repairSession(storedSession, {
+      persistSession: options?.persistSession !== false
+    }).catch(() => getStoredSession());
+  }
 
   function getStoredSession() {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return null;
-      if (!parsed.username || !parsed.secretKeyHex) return null;
-      return {
-        username: normalizeUsername(parsed.username),
-        secretKeyHex: String(parsed.secretKeyHex || "").trim().toLowerCase(),
-        pubkey: String(parsed.pubkey || "").trim().toLowerCase()
-      };
-    } catch {
-      return null;
-    }
+    return sessionStore.getStoredSession?.() || null;
   }
 
   function saveSession(session) {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        username: normalizeUsername(session.username),
-        secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase(),
-        pubkey: String(session.pubkey || "").trim().toLowerCase()
-      })
-    );
+    return sessionStore.saveSession?.({
+      username: normalizeUsername(session?.username),
+      secretKeyHex: String(session?.secretKeyHex || "").trim().toLowerCase(),
+      pubkey: String(session?.pubkey || "").trim().toLowerCase()
+    });
   }
 
   function clearSession() {
-    localStorage.removeItem(storageKey);
+    return sessionStore.clearSession?.();
   }
 
   function getStoredGuestSession() {
-    try {
-      const raw = localStorage.getItem(guestStorageKey);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return null;
-      if (!parsed.secretKeyHex) return null;
-      return {
-        kind: "guest",
-        guestId: String(parsed.guestId || "").trim(),
-        secretKeyHex: String(parsed.secretKeyHex || "").trim().toLowerCase(),
-        pubkey: String(parsed.pubkey || "").trim().toLowerCase(),
-        createdAt: String(parsed.createdAt || "").trim()
-      };
-    } catch {
-      return null;
-    }
+    return sessionStore.getStoredGuestSession?.() || null;
   }
 
   function saveGuestSession(session) {
-    localStorage.setItem(
-      guestStorageKey,
-      JSON.stringify({
-        guestId: String(session.guestId || "").trim(),
-        secretKeyHex: String(session.secretKeyHex || "").trim().toLowerCase(),
-        pubkey: String(session.pubkey || "").trim().toLowerCase(),
-        createdAt: String(session.createdAt || "").trim()
-      })
-    );
+    return sessionStore.saveGuestSession?.({
+      guestId: String(session?.guestId || "").trim(),
+      secretKeyHex: String(session?.secretKeyHex || "").trim().toLowerCase(),
+      pubkey: String(session?.pubkey || "").trim().toLowerCase(),
+      createdAt: String(session?.createdAt || "").trim()
+    });
   }
 
   function clearGuestSession() {
-    localStorage.removeItem(guestStorageKey);
+    return sessionStore.clearGuestSession?.();
   }
 
   async function repairSession(session, options = {}) {
@@ -311,6 +298,8 @@ export function createDeterministicSessionApi(config, deps) {
   }
 
   return {
+    hydrateStoredSessions,
+    resolveStoredSession,
     getStoredSession,
     saveSession,
     clearSession,

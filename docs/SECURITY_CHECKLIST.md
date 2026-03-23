@@ -2,7 +2,7 @@
 
 Use this before calling a `nostr-site` deployment production-ready.
 
-## Automated Gate
+## Build and release gate
 
 Run these first:
 
@@ -12,7 +12,7 @@ npm run build:all
 npm run audit:security
 ```
 
-For a live deployment, also run the browser smoke suite with real environment values:
+For a live deployment, also run the browser smoke suite against a real target:
 
 ```bash
 SMOKE_BASE_URL=https://your-site.example \
@@ -23,63 +23,58 @@ SMOKE_USER_PASSWORD=... \
 npm run smoke:browser
 ```
 
-`npm run release:check` bundles the build plus the static audit. The browser smoke run stays separate because it requires a real deployed target and real operator credentials.
+`npm run release:check` covers the build plus the static audit. Browser smoke is still separate because it needs a real deployed environment.
 
-## GitHub and Snapshot Safety
+## GitHub and bakedown safety
 
-- The pinner must only have branch + PR authority, not direct write access to the live deploy branch.
-- `GITHUB_REPO` must point at the intended site repo, not the generic runtime repo by accident.
-- `SNAPSHOT_REPO_DIR` must be the checked-out site repo that receives baked files.
-- Review the bakedown branch naming and confirm it cannot resolve to the base branch.
-- Confirm a human reviews and merges bakedown PRs.
-- Confirm GitHub auth is repo-scoped and limited to `Contents: Read and write` and `Pull requests: Read and write`.
+- pinner should have branch and PR authority, not direct write access to the live deploy branch
+- `GITHUB_REPO` must point at the intended site repo
+- `SNAPSHOT_REPO_DIR` must be the site checkout that receives baked output
+- bakedown branch naming should never resolve to the base branch
+- a human should review and merge bakedown PRs
 
-## Host and Operator Safety
+## Host and operator safety
 
-- Run the pinner on Linux as the primary deployment target.
-- Keep the pinner service isolated from unrelated operators and services on the host.
-- Ensure the runtime user only has the filesystem access it actually needs.
-- Keep `gh` auth and any env files out of shared shells and dotfiles.
-- Verify restart behavior after reboot and after a failed process exit.
+- run pinner on Linux
+- keep the service isolated from unrelated workloads
+- give the runtime user only the filesystem access it actually needs
+- keep `gh` auth and env files out of shared shell history and dotfiles
+- verify restart behavior after reboot and after failure
 
-## Key and Identity Safety
+## Key and identity safety
 
-- Confirm `ROOT_ADMIN_PUBKEY` is the real root admin, not the pinner service key.
-- Confirm the generic site template does not ship with a populated inbox or root admin pubkey.
-- Confirm site inbox key rotation works after admin revoke.
-- Confirm remaining admins can still decrypt current submissions after rotation.
-- Confirm revoked admins cannot trigger new bakedowns, blob fulfillments, or other admin-only actions.
-- Accept that older material already encrypted to an old inbox key remains readable to anyone who already held that key.
+- `ROOT_ADMIN_PUBKEY` should be a real admin key, not the pinner service signer
+- template defaults should not ship with a live inbox or root admin key filled in
+- site-key rotation should still work after admin revoke
+- revoked admins should not be able to trigger new bakedowns or admin-only actions
+- older ciphertext already addressed to an old key is still readable to people who already held that key
 
-## Relay and Data Safety
+## Relay and data safety
 
-- Verify the relay set is intentional and stable for the site.
-- Verify the app tag and protocol prefix are unique to the site.
-- Keep relay compatibility tested as peer, admin, and comment counts grow.
-- Confirm the site remains usable when some relays are delayed or missing events.
-- Confirm the map, comments, and admin views degrade cleanly when live relay data is incomplete.
+- verify the relay set is intentional
+- keep the app tag and protocol prefix site-specific
+- make sure the site still behaves reasonably when some relays are noisy or incomplete
+- verify map, comments, and admin views degrade cleanly under partial live data
 
-## Blob and Submission Safety
+## Blob and submission safety
 
-- Keep public avatars cleartext and treat them as public.
-- Keep submission attachments encrypted client-side before upload.
-- Confirm the configured blob cache host is correct.
-- Confirm peer pinners can re-warm cache misses without exposing private plaintext.
-- Confirm non-admins can only trigger public blob refreshes.
-- Confirm private submission fulfillment stays limited to currently authorized admins.
+- avatars are public; treat them that way
+- submission attachments should be encrypted client-side before upload
+- verify the blob cache host is correct
+- verify peer pinners can re-warm cache misses without exposing private plaintext
+- keep private fulfillment limited to currently authorized admins
 
-## UI and Workflow Safety
+## UI and workflow safety
 
-- Confirm every public HTML entry page ships with the intended CSP, referrer policy, and permissions policy.
-- Verify anonymous visitors only get guest-level public actions.
-- Verify sign-in-gated flows stay gated in the live UI.
-- Verify admin-only moderation, status changes, and publishing actions are role-checked in the live UI.
-- Verify audit views show meaningful admin and submission history.
-- Verify the login, submit, admin, and comment flows work on mobile as well as desktop.
+- check CSP, referrer policy, and permissions policy on public HTML entries
+- verify anonymous visitors only get guest-level actions
+- verify admin-only flows are still gated in the live UI
+- verify audit/history views remain useful
+- verify login, submit, admin, and comment flows on mobile as well as desktop
 
-## Reader-Facing Release Check
+## Reader-facing release sanity check
 
-- Review committed placeholder content and sample copy so nothing reads like leaked internal discussion or fake expertise.
-- Check docs for machine-local usernames, hostnames, passwords, IPs, or repo-specific operator notes.
-- Confirm `README.md` reflects the actual structure and workflow.
-- Confirm public calls to action point to the intended donate, merch, YouTube, and contact destinations.
+- remove placeholder or machine-local content that should not ship
+- check docs for local usernames, hostnames, passwords, IPs, or filesystem paths
+- make sure `README.md` still matches the actual repo
+- confirm public calls to action point to the right destinations

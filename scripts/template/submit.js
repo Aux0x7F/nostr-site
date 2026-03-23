@@ -5,7 +5,6 @@ import {
   deriveIdentity,
   uploadEncryptedBlob,
   ensureEventToolsLoaded,
-  loadPublicState,
   loadSubmissionThread,
   loadUserSubmissions,
   publishTaggedJson,
@@ -13,6 +12,7 @@ import {
   publishSubmissionChat,
   resolveSitePubkey
 } from "../core/nostr.js";
+import { createPublicStateProjectionStore } from "../core/public-state-projection.js";
 import {
   dedupeStrings as dedupe,
   escapeAttribute,
@@ -20,7 +20,7 @@ import {
   lastCommaValue
 } from "../core/text-utils.js";
 import { applyObservedMarkup, applyObservedText } from "../core/observed-regions.js";
-import { getStoredSession } from "../core/session.js";
+import { getStoredSession, resolveStoredSession } from "../core/session.js";
 import {
   renderSubmitPageView,
   renderSubmitSuggestionMarkup
@@ -37,11 +37,33 @@ const submitState = {
   chatModal: null
 };
 
+const submitPublicStateStore = createPublicStateProjectionStore({
+  getSessionSecretKey: async () => submitState.session?.secretKeyHex || "",
+  page: "submit",
+  refreshDelayMs: () => 0,
+  shouldRefresh: () => false
+});
+
+submitState.publicState = submitPublicStateStore.value;
+submitPublicStateStore.subscribe((snapshot) => {
+  submitState.publicState = snapshot.value;
+  if (!submitState.loading && !submitState.formModal && !submitState.chatModal) {
+    renderSubmitPage();
+  }
+});
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.querySelector("[data-submit-page]")) return;
   bindSubmitPage();
+  window.addEventListener("nostrsite:session-changed", handleSubmitSessionChanged);
   void refreshSubmitPage();
 });
+
+function handleSubmitSessionChanged() {
+  submitState.formModal = null;
+  submitState.chatModal = null;
+  void refreshSubmitPage(true);
+}
 
 function bindSubmitPage() {
   const shell = document.querySelector("[data-submit-shell]");
@@ -126,17 +148,27 @@ function bindSubmitPage() {
 }
 
 async function refreshSubmitPage(force = false) {
-  submitState.session = getStoredSession();
+  renderSubmitLoading("Opening your account...");
+  submitState.session = await resolveStoredSession({
+    persistSession: true
+  }).catch(() => getStoredSession());
   if (!submitState.session) {
     submitState.loading = false;
     submitState.loadingMessage = "";
+    submitState.publicState = submitPublicStateStore.value;
+    submitState.submissions = [];
     renderSubmitPage();
     return;
   }
   renderSubmitLoading("Looking up your submissions...");
   await ensureEventToolsLoaded();
   submitState.viewer = deriveIdentity(submitState.session.secretKeyHex);
-  submitState.publicState = await loadPublicState(force);
+  const cachedPublicState = !force ? submitPublicStateStore.value : null;
+  if (cachedPublicState) {
+    submitState.publicState = cachedPublicState;
+    renderSubmitPage();
+  }
+  submitState.publicState = (await submitPublicStateStore.hydrate({ force, reason: "submit-load" })).value;
   submitState.submissions = await loadUserSubmissions(submitState.session.secretKeyHex).catch(() => []);
   await maybeOpenChatFromUrl();
   submitState.loading = false;
